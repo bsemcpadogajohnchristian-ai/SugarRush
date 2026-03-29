@@ -1257,7 +1257,7 @@ AudioListener:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 88831215}
-  m_Enabled: 1
+  m_Enabled: 0
 --- !u!20 &88831218
 Camera:
   m_ObjectHideFlags: 0
@@ -2158,13 +2158,13 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 293484190}
   serializedVersion: 2
-  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalRotation: {x: -0, y: 1, z: -0, w: -0.00000040233135}
   m_LocalPosition: {x: -3, y: 0, z: 25}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 637488850}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 180, z: 0}
 --- !u!43 &311650934
 Mesh:
   m_ObjectHideFlags: 0
@@ -12462,10 +12462,10 @@ RectTransform:
   - {fileID: 1628537543}
   m_Father: {fileID: 1478744309}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
-  m_AnchorMin: {x: 0, y: 0}
-  m_AnchorMax: {x: 1, y: 0}
-  m_AnchoredPosition: {x: 0, y: 100}
-  m_SizeDelta: {x: 0, y: 200}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 1920, y: 300}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &1380228963
 MonoBehaviour:
@@ -12474,7 +12474,7 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1380228961}
-  m_Enabled: 0
+  m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: fe87c0e1cc204ed48ad3b37840f39efc, type: 3}
   m_Name: 
@@ -13573,13 +13573,13 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1473709528}
   serializedVersion: 2
-  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalRotation: {x: -0, y: 1, z: -0, w: 0.00000049173826}
   m_LocalPosition: {x: 3, y: 0, z: 25}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 637488850}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 180, z: 0}
 --- !u!1 &1476739758
 GameObject:
   m_ObjectHideFlags: 0
@@ -16389,9 +16389,10 @@ MonoBehaviour:
   candiesPerWave: 5
   waveDuration: 5
   spawnExclusionRadius: 6
+  minCandySpacing: 8
   teamBases: []
   mapCenter: {x: 0, y: 0, z: -10}
-  mapSize: 30
+  mapSize: 10
   minSurfaceDot: 0.9
   spawnableLayers:
     serializedVersion: 2
@@ -19033,8 +19034,8 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::InventoryUI
   slotContainer: {fileID: 2073242081}
-  cardWidth: 200
-  cardHeight: 130
+  cardWidth: 300
+  cardHeight: 300
   cardSpacing: 12
   colorNormal: {r: 0.12, g: 0.14, b: 0.22, a: 0.95}
   colorSelected: {r: 0.15, g: 0.38, b: 0.8, a: 1}
@@ -19055,10 +19056,10 @@ RectTransform:
   m_Children: []
   m_Father: {fileID: 1380228962}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
-  m_AnchorMin: {x: 0, y: 0}
-  m_AnchorMax: {x: 1, y: 0}
-  m_AnchoredPosition: {x: 0, y: 80}
-  m_SizeDelta: {x: 0, y: 140}
+  m_AnchorMin: {x: 0, y: 0.5}
+  m_AnchorMax: {x: 1, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 0, y: 200}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!43 &2088596978
 Mesh:
@@ -21417,12 +21418,12 @@ SceneRoots:
   m_Roots:
   - {fileID: 410087041}
   - {fileID: 832575519}
-  - {fileID: 718323004}
-  - {fileID: 1257294283}
   - {fileID: 6146557446395747066}
   - {fileID: 8778821948507098167}
-  - {fileID: 1760363230}
+  - {fileID: 718323004}
+  - {fileID: 1257294283}
   - {fileID: 1790498408}
+  - {fileID: 1760363230}
   - {fileID: 1734572426}
   - {fileID: 454573469}
   - {fileID: 1478744309}

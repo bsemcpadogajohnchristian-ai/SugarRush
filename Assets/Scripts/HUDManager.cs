@@ -310,8 +310,17 @@ public class HUDManager : MonoBehaviour
         if (decoyTimerText) decoyTimerText.text  = r > 0f ? $"{r:F1}s" : "Ready!";
     }
 
-    private void ShowReloadText() => reloadText?.gameObject.SetActive(true);
-    private void HideReloadText() => reloadText?.gameObject.SetActive(false);
+    private void ShowReloadText()
+    {
+        if (ammoText)   ammoText.gameObject.SetActive(false); // hide ammo count while reloading
+        if (reloadText) reloadText.gameObject.SetActive(true);
+    }
+
+    private void HideReloadText()
+    {
+        if (reloadText) reloadText.gameObject.SetActive(false);
+        if (ammoText)   ammoText.gameObject.SetActive(true);  // restore ammo count when done
+    }
 
     private void ShowWinner(TeamID w) =>
         ShowNotification(w == TeamID.TeamA ? "TEAM A WINS! 🍬" : "TEAM B WINS! 🍬", 5f);

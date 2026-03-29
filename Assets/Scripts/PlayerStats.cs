@@ -124,7 +124,7 @@ public class PlayerStats : NetworkBehaviour
         // position to all other clients automatically.
         PlayerController pc = GetComponent<PlayerController>();
         if (pc != null)
-            pc.WarpToSpawnRpc(pos);
+            pc.WarpToSpawnRpc(pos, rot);
         else
             Debug.LogWarning($"[PlayerStats] WarpToSpawnRpc failed — no PlayerController on {gameObject.name}");
 

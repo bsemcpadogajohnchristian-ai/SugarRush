@@ -172,7 +172,7 @@ public class LobbyManager : NetworkBehaviour
 
             TeamID     team = TeamForSlot[slot];
             PlayerRole role = RoleForSlot[slot];
-            Vector3    pos  = GetSpawnPosition(team);
+            var (pos, spawnRot) = GetSpawnPosition(team);
 
             // Spawn at origin — position doesn't matter here because the
             // owning client will override it via WarpToSpawnRpc below
@@ -204,7 +204,7 @@ public class LobbyManager : NetworkBehaviour
             // correct position to all other clients automatically.
             PlayerController pc = obj.GetComponent<PlayerController>();
             if (pc != null)
-                pc.WarpToSpawnRpc(pos);
+                pc.WarpToSpawnRpc(pos, spawnRot);
             else
                 Debug.LogWarning($"[Lobby] PlayerController not found on prefab — client {clientId} will spawn at origin.");
 
@@ -225,7 +225,7 @@ public class LobbyManager : NetworkBehaviour
         return arr;
     }
 
-    private Vector3 GetSpawnPosition(TeamID team)
+    private (Vector3 position, Quaternion rotation) GetSpawnPosition(TeamID team)
     {
         string    parentName = team == TeamID.TeamA ? "Spawns_TeamA" : "Spawns_TeamB";
         GameObject parent    = GameObject.Find(parentName);
@@ -253,7 +253,7 @@ public class LobbyManager : NetworkBehaviour
             }
 
             _usedSpawnPositions.Add(best.position);
-            return best.position;
+            return (best.position, best.rotation);   // rotation comes from the spawn point Transform
         }
 
         Debug.LogWarning($"[Lobby] '{parentName}' not found — using fallback position.");
@@ -262,7 +262,10 @@ public class LobbyManager : NetworkBehaviour
             ? new Vector3(-3f + idx * 3f, 1f,  20f)
             : new Vector3(-3f + idx * 3f, 1f, -20f);
         _usedSpawnPositions.Add(pos);
-        return pos;
+
+        // Fallback: Team A faces inward (toward negative Z), Team B faces inward (toward positive Z)
+        Quaternion rot = team == TeamID.TeamA ? Quaternion.Euler(0f, 180f, 0f) : Quaternion.identity;
+        return (pos, rot);
     }
 
         [Rpc(SendTo.ClientsAndHost)]
