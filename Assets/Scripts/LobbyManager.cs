@@ -19,7 +19,7 @@ public class LobbyManager : NetworkBehaviour
     public static LobbyManager Instance { get; private set; }
 
     // Change to 1 for solo testing, 4 for real multiplayer
-    private const int PLAYERS_NEEDED = 1;
+    private const int PLAYERS_NEEDED = 2;
 
     [Header("Setup")]
     public GameObject playerPrefab;

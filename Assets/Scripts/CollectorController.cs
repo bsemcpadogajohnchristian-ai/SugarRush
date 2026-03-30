@@ -279,7 +279,8 @@ public class CollectorController : NetworkBehaviour
 
     private void OnDied() { if (IsServer) DropAllCandiesServer(); }
 
-    public int GetCarriedCount() => carriedCount.Value;
+    public int  GetCarriedCount()     => carriedCount.Value;
+    public bool IsSuperspeedActive()  => _superSpeedActive;
 
     private void OnDrawGizmosSelected()
     {
