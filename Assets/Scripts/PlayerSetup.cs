@@ -28,6 +28,16 @@ public class PlayerSetup : NetworkBehaviour
     [Tooltip("The Body child GameObject that holds the Collector mesh.")]
     public GameObject bodyCollector;
 
+    [Header("First-Person Arms (Collector only)")]
+    [Tooltip("The first-person arm/hand mesh. Must be a child of CameraHolder. " +
+             "Only visible to the local owner. Assign the root GameObject of the FP arms mesh.")]
+    public GameObject fpArms;
+
+    [Tooltip("The secondary camera that renders ONLY the Arms layer on top of the scene. " +
+             "Must be a child of CameraHolder. Set Clear Flags=Depth Only, Depth=1, " +
+             "Culling Mask=Arms only. Leave empty if not using the layer-camera system.")]
+    public Camera armsCamera;
+
     private PlayerStats _stats;
 
     private void Awake()
@@ -47,6 +57,16 @@ public class PlayerSetup : NetworkBehaviour
             if (audioListener != null) audioListener.enabled = true;
             Cursor.lockState = CursorLockMode.Locked;
         }
+
+        // FP arms are ONLY for the local owner — hide them on all other clients.
+        // Each client has their own prefab instance; setting active false locally
+        // does not affect what other clients render on their own instances.
+        if (fpArms != null)
+            fpArms.SetActive(IsOwner);
+
+        // The arms camera only needs to run on the local owner.
+        if (armsCamera != null)
+            armsCamera.gameObject.SetActive(IsOwner);
 
         _stats.role.OnValueChanged += OnRoleChanged;
         _stats.team.OnValueChanged += OnTeamChanged;
@@ -110,9 +130,39 @@ public class PlayerSetup : NetworkBehaviour
         if (collectorController != null) collectorController.enabled = !shooter;
 
         // Swap visible model based on role.
-        // Both clients and server run this so every player sees the correct model.
         if (bodyShooter   != null) bodyShooter.SetActive(shooter);
         if (bodyCollector != null) bodyCollector.SetActive(!shooter);
+
+        // ── FP arms / body renderer visibility ────────────────────────────────
+        //
+        // LOCAL OWNER sees:   FP arms (hands) — NOT their own 3rd-person body
+        // OTHER clients see:  The 3rd-person body — NOT the FP arms
+        //
+        // We achieve this by toggling the body's Renderer components only on
+        // the owner's local instance. Other clients have their own prefab copies
+        // where the Renderer is still enabled — they see the body normally.
+        if (IsOwner && !shooter && bodyCollector != null)
+        {
+            // Hide every renderer on the 3rd-person collector body from the owner's view
+            foreach (Renderer r in bodyCollector.GetComponentsInChildren<Renderer>())
+                r.enabled = false;
+        }
+        else if (!IsOwner && bodyCollector != null)
+        {
+            // Non-owner always sees the 3rd-person body
+            foreach (Renderer r in bodyCollector.GetComponentsInChildren<Renderer>())
+                r.enabled = true;
+        }
+
+        // ── Main camera culling mask: exclude "Arms" layer ────────────────────
+        // This stops the FP arms from appearing through walls via the main camera.
+        // The armsCamera (depth-only, higher depth) renders them on top correctly.
+        if (IsOwner && playerCamera != null)
+        {
+            int armsLayer = LayerMask.NameToLayer("Arms");
+            if (armsLayer >= 0)
+                playerCamera.cullingMask &= ~(1 << armsLayer);  // exclude Arms layer
+        }
 
         if (animator != null && animator.isInitialized)
         {

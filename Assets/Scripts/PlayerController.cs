@@ -26,9 +26,12 @@ public class PlayerController : NetworkBehaviour
     public float gravity    = -19.62f;
 
     [Header("Crouch")]
-    public float standHeight  = 2f;
-    public float crouchHeight = 1f;
-    public float crouchLerp   = 8f;
+    public float standHeight       = 2f;
+    public float crouchHeight      = 1f;
+    public float crouchLerp        = 8f;
+    [Tooltip("How far the camera drops when crouching (negative = down). " +
+             "Match this to roughly half the difference between standHeight and crouchHeight.")]
+    public float crouchCameraOffset = -0.55f;
 
     [Header("Ground detection")]
     public Transform groundCheck;
@@ -50,11 +53,11 @@ public class PlayerController : NetworkBehaviour
     private bool    _isGrounded;
     private bool    _isCrouching;
     private bool    _isSprinting;
+    private float   _airSpeed;
 
-    // Horizontal speed locked in the last frame the player was grounded.
-    // Used while airborne so crouch/sprint state changes mid-air don't
-    // alter the speed you launched with — this is what enables bunnyhopping.
-    private float _airSpeed;
+    // Stores the camera's local position when standing so we always lerp
+    // back to the exact same place regardless of where cameraHolder starts.
+    private Vector3 _camDefaultLocalPos;
 
     private void Awake()
     {
@@ -80,6 +83,10 @@ public class PlayerController : NetworkBehaviour
 
         Cursor.lockState = CursorLockMode.Locked;
         _cc.height = standHeight;
+
+        // Record the camera's resting position so Crouch() can lerp back to it.
+        if (cameraHolder != null)
+            _camDefaultLocalPos = cameraHolder.localPosition;
     }
 
     private void Update()
@@ -164,7 +171,6 @@ public class PlayerController : NetworkBehaviour
         }
         else if (!wantCrouch && _isCrouching)
         {
-            // Raycast upward from head to check for ceiling
             Vector3 head   = transform.position + Vector3.up * _cc.height;
             float   needed = standHeight - crouchHeight;
             if (!Physics.Raycast(head, Vector3.up, needed))
@@ -173,28 +179,36 @@ public class PlayerController : NetworkBehaviour
 
         if (_isCrouching)
         {
-            // Snap height immediately on crouch-down.
-            //
-            // WHY NOT LERP HERE:
-            //   Lerping height while _isCrouching is already true means the CC
-            //   capsule shrinks frame-by-frame over ~0.1s. Each shrink step can
-            //   briefly break ground contact (isGrounded flickers false), causing
-            //   gravity to accumulate for those frames and creating the "slows down
-            //   then speeds up" jitter the player feels. Snapping instantly makes
-            //   the capsule change atomic — no mid-lerp physics artifacts.
             _cc.height = crouchHeight;
         }
         else
         {
-            // Lerp only on the way UP so we smoothly check ceiling clearance
-            // across multiple frames without snapping into geometry above us.
             _cc.height = Mathf.Lerp(_cc.height, standHeight, crouchLerp * Time.deltaTime);
+        }
+
+        // ── Camera crouch ─────────────────────────────────────────────────────
+        // Lerp the camera down/up so the viewport physically drops when crouching.
+        // This makes crouching FEEL real — the screen moves, not just the capsule.
+        if (cameraHolder != null)
+        {
+            float targetY = _isCrouching
+                ? _camDefaultLocalPos.y + crouchCameraOffset
+                : _camDefaultLocalPos.y;
+
+            Vector3 target = new Vector3(
+                _camDefaultLocalPos.x,
+                Mathf.Lerp(cameraHolder.localPosition.y, targetY, crouchLerp * Time.deltaTime),
+                _camDefaultLocalPos.z);
+
+            cameraHolder.localPosition = target;
         }
     }
 
     public bool IsSprinting() => _isSprinting;
     public bool IsCrouching() => _isCrouching;
     public bool IsGrounded()  => _isGrounded;
+    public bool IsJumping()   => !_isGrounded && _velocity.y > 0f;
+    public bool IsFalling()   => !_isGrounded && _velocity.y < -1f;
 
     // ── Spawn warp ────────────────────────────────────────────────────────────
     //
