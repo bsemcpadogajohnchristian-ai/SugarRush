@@ -167,8 +167,23 @@ public class PlayerSetup : NetworkBehaviour
         if (animator != null && animator.isInitialized)
         {
             animator.SetInteger("RoleID", (int)role);
-            animator.ResetTrigger("Die");
-            animator.SetBool("IsDead", false);
+
+            // BUG FIX — Death-state reset guard:
+            //   ApplyRole is called on every client whenever the role NetworkVariable
+            //   syncs (OnNetworkSpawn, OnRoleChanged).  The old code unconditionally
+            //   called ResetTrigger("Die") and SetBool("IsDead", false), which
+            //   cleared the animator's death pose even when the player was actually
+            //   dead — causing the corpse to visually snap back to idle.
+            //
+            //   The Die trigger and IsDead bool are owned by CollectorAnimator /
+            //   the player's death flow; ApplyRole should never touch them while
+            //   the player is dead.  Only reset them when the player is alive so
+            //   a fresh role assignment starts from a clean, non-dead animator state.
+            if (_stats == null || !_stats.IsDead())
+            {
+                animator.ResetTrigger("Die");
+                animator.SetBool("IsDead", false);
+            }
         }
     }
 }

@@ -2,7 +2,7 @@
 // Sugar Rush
 // Unity 6.3 LTS + Netcode for GameObjects v2.1+
 //
-// Holds all synced player data: role, team, health, alive/dead.
+// Holds all synced player data: role, team, health, alive/dead, crouching, sprinting.
 // Damage and respawn are server-authoritative.
 
 using Unity.Netcode;
@@ -25,6 +25,42 @@ public class PlayerStats : NetworkBehaviour
 
     public NetworkVariable<bool> isDead = new(false,
         NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+
+    // FIX (crouch): Owner-writable so PlayerController can broadcast the real
+    // crouch state to all clients. Replaced the broken speed heuristic in
+    // CollectorAnimator that caused non-owners to always appear crouching.
+    public NetworkVariable<bool> isCrouching = new(false,
+        NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Owner);
+
+    // FIX (sprint): Owner-writable so PlayerController can broadcast the real
+    // sprint state to all clients. Replaced the runThreshold heuristic in
+    // CollectorAnimator — measured NT position-delta speed is ~half of real
+    // speed at 30 Hz, so runThreshold=7 was never reached during normal sprinting.
+    public NetworkVariable<bool> isSprinting = new(false,
+        NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Owner);
+
+    // FIX (jump — replaces old jumpPulse bool):
+    //
+    // WHY A COUNTER, NOT A BOOL:
+    //   The old jumpPulse bool was set true for exactly ONE frame, then reset false.
+    //   NGO replicates NetworkVariables at ~30 Hz while Unity runs at 60 fps.
+    //   Within a single 33ms NGO tick the bool went false→true→false.
+    //   NGO batches changes and sends only the LATEST value, so non-owners
+    //   received "false" — they never saw "true" — the Jump trigger never fired.
+    //   Other players saw the collector run off ledges with zero jump animation.
+    //
+    // HOW THE COUNTER FIXES IT:
+    //   The counter only ever increases. If it was 5 and is now 6, NGO sends 6.
+    //   Non-owners see 5→6, detect the change, and fire the Jump trigger once.
+    //   No one-frame timing dependency. No risk of the value reverting before
+    //   the NGO tick fires.
+    //
+    // ANIMATOR USAGE:
+    //   CollectorAnimator caches _lastJumpSequence. Every frame it compares
+    //   jumpSequence.Value != _lastJumpSequence. On mismatch it fires the
+    //   "Jump" Trigger and updates _lastJumpSequence to the current value.
+    public NetworkVariable<int> jumpSequence = new(0,
+        NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Owner);
 
     // ── Inspector settings ────────────────────────────────────────────────────
 
@@ -76,12 +112,12 @@ public class PlayerStats : NetworkBehaviour
     {
         if (role.Value == PlayerRole.Shooter)
         {
-            maxHP          = shooterMaxHP;
+            maxHP           = shooterMaxHP;
             speedMultiplier = shooterSpeed;
         }
         else
         {
-            maxHP          = collectorMaxHP;
+            maxHP           = collectorMaxHP;
             speedMultiplier = collectorSpeed;
         }
 

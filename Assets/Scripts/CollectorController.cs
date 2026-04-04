@@ -35,6 +35,14 @@ public class CollectorController : NetworkBehaviour
     public NetworkVariable<int> carriedCount = new(0,
         NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
 
+    // FIX (superspeed animation): Owner-writable NetworkVariable that mirrors
+    // _superSpeedActive. The old IsSuperspeedActive() returned a plain local bool
+    // that only ever ran on the owner — CollectorController is disabled on
+    // non-owners so _superSpeedActive was always false for them, meaning the
+    // FastRun animation never played on other clients during superspeed.
+    public NetworkVariable<bool> superSpeedActive = new(false,
+        NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Owner);
+
     private PlayerController _pc;
     private PlayerStats      _stats;
 
@@ -125,12 +133,12 @@ public class CollectorController : NetworkBehaviour
 
             // Evenly distribute around a circle so no two candies land on top of each other.
             // Ring 0 (first 8): radius 1.8 m  |  Ring 1 (next 8): radius 3.2 m  etc.
-            int   ring        = i / 8;
-            int   ringSlot    = i % 8;
-            int   ringCount   = Mathf.Min(count - ring * 8, 8);
-            float radius      = 1.8f + ring * 1.4f;
-            float angle       = (2f * Mathf.PI / ringCount) * ringSlot;
-            Vector3 offset    = new Vector3(Mathf.Cos(angle) * radius, 0f, Mathf.Sin(angle) * radius);
+            int   ring      = i / 8;
+            int   ringSlot  = i % 8;
+            int   ringCount = Mathf.Min(count - ring * 8, 8);
+            float radius    = 1.8f + ring * 1.4f;
+            float angle     = (2f * Mathf.PI / ringCount) * ringSlot;
+            Vector3 offset  = new Vector3(Mathf.Cos(angle) * radius, 0f, Mathf.Sin(angle) * radius);
 
             _carriedCandies[i].DropServer(transform.position + offset);
         }
@@ -172,12 +180,16 @@ public class CollectorController : NetworkBehaviour
 
     private IEnumerator SuperSpeedRoutine()
     {
-        _superSpeedActive   = true;
-        _pc.speedMultiplier = _currentPenalty * superSpeedMultiplier;
+        _superSpeedActive        = true;
+        superSpeedActive.Value   = true;   // FIX: broadcast to all clients for animation
+        _pc.speedMultiplier      = _currentPenalty * superSpeedMultiplier;
+
         yield return new WaitForSeconds(superSpeedDuration);
-        _pc.speedMultiplier = _currentPenalty;
-        _superSpeedActive   = false;
-        _superSpeedTimer    = superSpeedCooldown;
+
+        _pc.speedMultiplier      = _currentPenalty;
+        _superSpeedActive        = false;
+        superSpeedActive.Value   = false;  // FIX: broadcast end of superspeed
+        _superSpeedTimer         = superSpeedCooldown;
     }
 
     // ── Decoy ─────────────────────────────────────────────────────────────────
@@ -197,28 +209,11 @@ public class CollectorController : NetworkBehaviour
     {
         if (decoyPrefab == null) return;
 
-        // Offset 1.5 m in front so the decoy doesn't overlap the collector's capsule.
         Vector3 roughPos = pos + dir.normalized * 1.5f;
-
-        // ── Compute the ground-snapped position BEFORE Instantiate ────────────
-        //
-        // This is the only reliable way to give NGO the correct initial position:
-        //   • Writing transform.position before Spawn() can be ignored or
-        //     overwritten by the CharacterController re-enabling itself.
-        //   • Writing transform.position after Spawn() may not re-trigger a full
-        //     NetworkTransform baseline sync — clients end up with the wrong origin
-        //     and see the decoy floating and frozen even while the server moves it.
-        //
-        // By passing the correct ground position directly to Instantiate(), the
-        // GameObject starts at the right Y, Spawn() broadcasts that Y to all clients,
-        // and every subsequent CC.Move() delta is cleanly picked up by NetworkTransform.
-        // ─────────────────────────────────────────────────────────────────────────
         Vector3 groundPos = ComputeGroundPos(roughPos, GetComponent<Collider>());
 
         GameObject obj = Instantiate(decoyPrefab, groundPos, Quaternion.LookRotation(dir));
 
-        // Assign team BEFORE Spawn() so the server has it immediately
-        // when ShooterController.RegisterHitServerRpc checks it.
         DecoyAI decoyAI = obj.GetComponent<DecoyAI>();
         if (decoyAI != null) decoyAI.ownerTeam = _stats.team.Value;
 
@@ -230,13 +225,9 @@ public class CollectorController : NetworkBehaviour
     /// Raycasts downward from <paramref name="fromPos"/> to find the ground surface,
     /// then returns the pivot position that places the CharacterController's capsule
     /// bottom exactly on that surface.
-    /// Skips <paramref name="skipCollider"/> and any PlayerStats colliders so we never
-    /// snap to a player body or the collector who spawned the decoy.
     /// </summary>
     private Vector3 ComputeGroundPos(Vector3 fromPos, Collider skipCollider)
     {
-        // Read CC shape from the prefab so we can compute the pivot offset.
-        // This avoids instantiating just to read values.
         CharacterController prefabCC = decoyPrefab.GetComponent<CharacterController>();
         float bottomOffset = prefabCC != null
             ? prefabCC.center.y - prefabCC.height * 0.5f + prefabCC.skinWidth
@@ -279,8 +270,8 @@ public class CollectorController : NetworkBehaviour
 
     private void OnDied() { if (IsServer) DropAllCandiesServer(); }
 
-    public int  GetCarriedCount()     => carriedCount.Value;
-    public bool IsSuperspeedActive()  => _superSpeedActive;
+    public int  GetCarriedCount()    => carriedCount.Value;
+    public bool IsSuperspeedActive() => _superSpeedActive;
 
     private void OnDrawGizmosSelected()
     {
