@@ -1,9 +1,3 @@
-// CollectorController.cs
-// Sugar Rush — Unity 6.3 LTS + NGO v2.1+
-//
-// _carriedCandies is the reverse-lookup list that makes drop/deliver work.
-// Without it, candies stay floating after death (the original bug).
-
 using System.Collections;
 using System.Collections.Generic;
 using Unity.Netcode;
@@ -31,15 +25,13 @@ public class CollectorController : NetworkBehaviour
     public UnityEvent<int>   onCandyCountChanged  = new();
     public UnityEvent<float> onSuperSpeedCooldown = new();
     public UnityEvent<float> onDecoyCooldown      = new();
+    
+    
+    public UnityEvent        onDecoyFired         = new();
 
     public NetworkVariable<int> carriedCount = new(0,
         NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
 
-    // FIX (superspeed animation): Owner-writable NetworkVariable that mirrors
-    // _superSpeedActive. The old IsSuperspeedActive() returned a plain local bool
-    // that only ever ran on the owner — CollectorController is disabled on
-    // non-owners so _superSpeedActive was always false for them, meaning the
-    // FastRun animation never played on other clients during superspeed.
     public NetworkVariable<bool> superSpeedActive = new(false,
         NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Owner);
 
@@ -51,7 +43,6 @@ public class CollectorController : NetworkBehaviour
     private bool  _superSpeedActive;
     private float _currentPenalty = 1f;
 
-    // Server-side reverse lookup: this collector → its held candies
     private readonly List<Candy> _carriedCandies = new();
 
     private void Awake()
@@ -82,13 +73,11 @@ public class CollectorController : NetworkBehaviour
         TickCooldowns();
     }
 
-    // ── Pickup ────────────────────────────────────────────────────────────────
-
+    
     private void HandlePickup()
     {
-        // GDD rule: only Collectors can pick up candy
         if (_stats.role.Value != PlayerRole.Collector) return;
-        if (!Input.GetKeyDown(KeyCode.F)) return;
+        if (!Input.GetMouseButtonDown(0)) return;
 
         Collider[] hits = Physics.OverlapSphere(transform.position, pickupRadius, candyLayer);
         foreach (Collider hit in hits)
@@ -106,7 +95,6 @@ public class CollectorController : NetworkBehaviour
     [Rpc(SendTo.Server)]
     private void PickupCandyRpc(ulong candyId)
     {
-        // Server-side role guard: reject if caller is not a Collector
         if (_stats.role.Value != PlayerRole.Collector) return;
         if (carriedCount.Value >= maxCarryCapacity) return;
         if (!NetworkManager.SpawnManager.SpawnedObjects.TryGetValue(candyId, out var obj)) return;
@@ -120,8 +108,7 @@ public class CollectorController : NetworkBehaviour
         CandySpawner.Instance?.NotifyCandyPickedUp(candy);
     }
 
-    // ── Drop (on death) ───────────────────────────────────────────────────────
-
+    
     public void DropAllCandiesServer()
     {
         if (!IsServer) return;
@@ -131,8 +118,6 @@ public class CollectorController : NetworkBehaviour
         {
             if (_carriedCandies[i] == null) continue;
 
-            // Evenly distribute around a circle so no two candies land on top of each other.
-            // Ring 0 (first 8): radius 1.8 m  |  Ring 1 (next 8): radius 3.2 m  etc.
             int   ring      = i / 8;
             int   ringSlot  = i % 8;
             int   ringCount = Mathf.Min(count - ring * 8, 8);
@@ -147,8 +132,7 @@ public class CollectorController : NetworkBehaviour
         carriedCount.Value = 0;
     }
 
-    // ── Deliver ───────────────────────────────────────────────────────────────
-
+    
     public void DeliverCandiesServer(TeamID scoringTeam)
     {
         if (!IsServer) return;
@@ -160,8 +144,7 @@ public class CollectorController : NetworkBehaviour
         NetworkGameManager.Instance?.AddScore(scoringTeam, count);
     }
 
-    // ── Speed ─────────────────────────────────────────────────────────────────
-
+    
     private void OnCarriedCountChanged(int prev, int next)
     {
         if (!IsOwner) return;
@@ -170,8 +153,7 @@ public class CollectorController : NetworkBehaviour
         onCandyCountChanged?.Invoke(next);
     }
 
-    // ── Superspeed ────────────────────────────────────────────────────────────
-
+    
     private void HandleSuperSpeed()
     {
         if (Input.GetKeyDown(KeyCode.E) && _superSpeedTimer <= 0f && !_superSpeedActive)
@@ -181,19 +163,18 @@ public class CollectorController : NetworkBehaviour
     private IEnumerator SuperSpeedRoutine()
     {
         _superSpeedActive        = true;
-        superSpeedActive.Value   = true;   // FIX: broadcast to all clients for animation
+        superSpeedActive.Value   = true;
         _pc.speedMultiplier      = _currentPenalty * superSpeedMultiplier;
 
         yield return new WaitForSeconds(superSpeedDuration);
 
         _pc.speedMultiplier      = _currentPenalty;
         _superSpeedActive        = false;
-        superSpeedActive.Value   = false;  // FIX: broadcast end of superspeed
+        superSpeedActive.Value   = false;
         _superSpeedTimer         = superSpeedCooldown;
     }
 
-    // ── Decoy ─────────────────────────────────────────────────────────────────
-
+    
     private void HandleDecoy()
     {
         if (Input.GetKeyDown(KeyCode.Q) && _decoyTimer <= 0f)
@@ -201,6 +182,7 @@ public class CollectorController : NetworkBehaviour
             SpawnDecoyRpc(transform.position, transform.forward,
                 _stats.speedMultiplier * _pc.sprintSpeed);
             _decoyTimer = decoyCooldown;
+            onDecoyFired?.Invoke();   
         }
     }
 
@@ -209,7 +191,7 @@ public class CollectorController : NetworkBehaviour
     {
         if (decoyPrefab == null) return;
 
-        Vector3 roughPos = pos + dir.normalized * 1.5f;
+        Vector3 roughPos  = pos + dir.normalized * 1.5f;
         Vector3 groundPos = ComputeGroundPos(roughPos, GetComponent<Collider>());
 
         GameObject obj = Instantiate(decoyPrefab, groundPos, Quaternion.LookRotation(dir));
@@ -221,11 +203,6 @@ public class CollectorController : NetworkBehaviour
         decoyAI?.InitializeMovement(dir, speed);
     }
 
-    /// <summary>
-    /// Raycasts downward from <paramref name="fromPos"/> to find the ground surface,
-    /// then returns the pivot position that places the CharacterController's capsule
-    /// bottom exactly on that surface.
-    /// </summary>
     private Vector3 ComputeGroundPos(Vector3 fromPos, Collider skipCollider)
     {
         CharacterController prefabCC = decoyPrefab.GetComponent<CharacterController>();
@@ -244,7 +221,6 @@ public class CollectorController : NetworkBehaviour
             if (h.collider.GetComponentInParent<PlayerStats>() != null) continue;
 
             float pivotY = h.point.y - bottomOffset;
-            Debug.Log($"[DecoySpawn] groundPos pivotY={pivotY:F3}  hit.y={h.point.y:F3}  offset={bottomOffset:F3}");
             return new Vector3(fromPos.x, pivotY, fromPos.z);
         }
 
@@ -252,8 +228,7 @@ public class CollectorController : NetworkBehaviour
         return fromPos;
     }
 
-    // ── Cooldown ticks ────────────────────────────────────────────────────────
-
+    
     private void TickCooldowns()
     {
         if (_superSpeedTimer > 0f)

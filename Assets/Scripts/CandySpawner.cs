@@ -1,7 +1,3 @@
-// CandySpawner.cs
-// Sugar Rush — Unity 6.3 LTS + NGO v2.1+
-// Server-only. Spawns candy waves and tracks which are still on the ground.
-
 using System.Collections;
 using System.Collections.Generic;
 using Unity.Netcode;
@@ -73,8 +69,7 @@ public class CandySpawner : NetworkBehaviour
     {
         _waveCandy.Clear();
 
-        // Track positions placed so far this wave so GetValidPosition
-        // can reject candidates that are too close to existing candy.
+        
         List<Vector3> placedPositions = new();
 
         for (int i = 0; i < candiesPerWave; i++)
@@ -102,20 +97,14 @@ public class CandySpawner : NetworkBehaviour
 
             if (Physics.Raycast(rayOrigin, Vector3.down, out RaycastHit hit, 40f, spawnableLayers))
             {
-                // ── Surface normal check ──────────────────────────────────────
-                // hit.normal points perpendicular to the surface.
-                // A flat floor has normal = (0,1,0) — dot with Vector3.up = 1.0
-                // A wall has normal = (1,0,0) or (0,0,1) — dot with Vector3.up = 0
-                // A 45° ramp has dot ≈ 0.7
-                //
-                // We reject anything below minSurfaceDot so candy never lands
-                // on walls, steep ramps, or the tops of narrow objects.
+                
+                
                 float surfaceDot = Vector3.Dot(hit.normal, Vector3.up);
                 if (surfaceDot < minSurfaceDot) continue;
 
                 Vector3 pos = hit.point + Vector3.up * 0.5f;
 
-                // ── Team base exclusion ───────────────────────────────────────
+                
                 bool tooClose = false;
                 if (teamBases != null)
                     foreach (Transform t in teamBases)
@@ -124,32 +113,19 @@ public class CandySpawner : NetworkBehaviour
 
                 if (tooClose) continue;
 
-                // ── Candy spacing check ───────────────────────────────────────
-                // Reject this position if it lands too close to any candy
-                // already placed in this wave. Without this check, candies
-                // can spawn on top of each other since each GetValidPosition
-                // call is unaware of the others.
+                
                 foreach (Vector3 placed in placedPositions)
                     if (Vector3.Distance(pos, placed) < minCandySpacing)
                     { tooClose = true; break; }
 
                 if (tooClose) continue;
 
-                // ── Vertical clearance check ──────────────────────────────────
-                // The downward raycast tells us the floor is here, but not
-                // whether there is geometry ABOVE the spawn point (e.g. a
-                // ceiling, overhang, or prop that the candy would spawn inside).
-                // Require at least 1.5 m of clear space above so the candy
-                // is never clipped into anything.
+                
                 if (Physics.Raycast(pos, Vector3.up, 1.5f,
                     spawnableLayers, QueryTriggerInteraction.Ignore))
                     continue;
 
-                // ── Overlap check ─────────────────────────────────────────────
-                // A final sphere test at the exact spawn point catches any case
-                // where the position is technically above a surface but still
-                // inside a concave mesh, a hollow prop, or a partially-embedded
-                // piece of geometry that the raycast can't detect from above.
+                
                 if (Physics.CheckSphere(pos, 0.35f,
                     spawnableLayers, QueryTriggerInteraction.Ignore))
                     continue;

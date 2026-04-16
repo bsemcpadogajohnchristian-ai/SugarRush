@@ -1,6 +1,3 @@
-// Candy.cs
-// Sugar Rush — Unity 6.3 LTS + NGO v2.1+
-
 using System.Collections;
 using Unity.Netcode;
 using UnityEngine;
@@ -71,12 +68,11 @@ public class Candy : NetworkBehaviour
         }
     }
 
-    // ── Server-only state changes ─────────────────────────────────────────────
-
+    
     public void PickupServer(ulong collectorId, int slot)
     {
         if (!IsServer) return;
-        // Cancel the drop-lifetime timer — someone grabbed it in time
+        
         if (_despawnRoutine != null) { StopCoroutine(_despawnRoutine); _despawnRoutine = null; }
         state.Value     = CandyState.Carried;
         carrierId.Value = collectorId;
@@ -92,7 +88,7 @@ public class Candy : NetworkBehaviour
         transform.position = dropPos + Vector3.up * 0.5f;
         _startPos = transform.position;
 
-        // Auto-despawn after droppedLifetime seconds if nobody picks it up
+        
         if (_despawnRoutine != null) StopCoroutine(_despawnRoutine);
         _despawnRoutine = StartCoroutine(DroppedLifetimeRoutine());
     }

@@ -1,10 +1,3 @@
-// NetworkGameManager.cs
-// Sugar Rush
-// Unity 6.3 LTS + Netcode for GameObjects v2.1+
-//
-// Manages match state, score, timer, and player respawn.
-// Lives in GameScene. Singleton.
-
 using System.Collections;
 using System.Collections.Generic;
 using Unity.Netcode;
@@ -20,8 +13,7 @@ public class NetworkGameManager : NetworkBehaviour
     public int   candiesNeededToWin   = 50;
     public float respawnDelay         = 5f;
 
-    // ── Synced state ──────────────────────────────────────────────────────────
-
+    
     public NetworkVariable<int> scoreTeamA = new(0,
         NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
 
@@ -34,22 +26,18 @@ public class NetworkGameManager : NetworkBehaviour
     public NetworkVariable<MatchState> matchState = new(MatchState.WaitingForPlayers,
         NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
 
-    // ── Local events (owner client subscribes via HUDManager) ─────────────────
-
+    
     public UnityEvent<int, int> onScoreUpdated  = new();
     public UnityEvent<float>    onTimerUpdated   = new();
     public UnityEvent<TeamID>   onMatchOver      = new();
     public UnityEvent           onMatchDraw      = new();
 
-    // ── Internal ─────────────────────────────────────────────────────────────
-
+    
     private readonly List<PlayerStats> _players = new();
     private Transform[] _spawnA;
     private Transform[] _spawnB;
 
-    // Timer runs locally on the server every frame for precision.
-    // The NetworkVariable is only written 10x/sec (every 0.1s) instead of
-    // 60x/sec — reduces dirty-marking and bandwidth by ~83%.
+    
     private float _localTimer;
     private float _timerSyncAccum;
     private const float TIMER_SYNC_INTERVAL = 0.1f;
@@ -76,8 +64,7 @@ public class NetworkGameManager : NetworkBehaviour
             NetworkManager.Singleton.OnClientDisconnectCallback -= OnClientDisconnected;
     }
 
-    // ── Spawn points (set by LobbyManager after scene load) ───────────────────
-
+    
     public void SetSpawnPoints(Transform[] a, Transform[] b)
     {
         _spawnA = a;
@@ -85,8 +72,7 @@ public class NetworkGameManager : NetworkBehaviour
         Debug.Log($"[NGM] Spawn points set — TeamA: {_spawnA?.Length ?? 0}  TeamB: {_spawnB?.Length ?? 0}");
     }
 
-    // ── Player registry ───────────────────────────────────────────────────────
-
+    
     public void RegisterPlayer(PlayerStats ps)
     {
         if (!IsServer || ps == null || _players.Contains(ps)) return;
@@ -98,8 +84,7 @@ public class NetworkGameManager : NetworkBehaviour
         _players.RemoveAll(p => p == null || p.OwnerClientId == clientId);
     }
 
-    // ── Match flow ────────────────────────────────────────────────────────────
-
+    
     public void StartMatch()
     {
         if (!IsServer) return;
@@ -120,8 +105,7 @@ public class NetworkGameManager : NetworkBehaviour
         _localTimer     -= Time.deltaTime;
         _timerSyncAccum += Time.deltaTime;
 
-        // Sync to clients at 10 Hz instead of every frame — cuts NV dirty
-        // marking from ~60/sec down to 10/sec with no visible difference on HUD.
+        
         if (_timerSyncAccum >= TIMER_SYNC_INTERVAL)
         {
             _timerSyncAccum     = 0f;
@@ -174,8 +158,7 @@ public class NetworkGameManager : NetworkBehaviour
         else if (scoreTeamB.Value >= candiesNeededToWin) { matchState.Value = MatchState.GameOver; EndGame(TeamID.TeamB); }
     }
 
-    // ── Respawn ───────────────────────────────────────────────────────────────
-
+    
     public void OnPlayerDied(PlayerStats ps)
     {
         if (!IsServer) return;
@@ -186,7 +169,7 @@ public class NetworkGameManager : NetworkBehaviour
     {
         yield return new WaitForSeconds(respawnDelay);
         if (ps == null || ps.NetworkObject == null || !ps.NetworkObject.IsSpawned) yield break;
-        if (!ps.isDead.Value) yield break;  // already respawned somehow
+        if (!ps.isDead.Value) yield break;  
 
         Transform pt = BestSpawnPoint(ps.team.Value);
         if (pt != null) ps.RespawnAtPosition(pt.position, pt.rotation);
@@ -222,8 +205,7 @@ public class NetworkGameManager : NetworkBehaviour
         return best;
     }
 
-    // ── RPCs ──────────────────────────────────────────────────────────────────
-
+    
     [Rpc(SendTo.ClientsAndHost)]
     private void AnnounceWinnerRpc(TeamID winner) => onMatchOver?.Invoke(winner);
 

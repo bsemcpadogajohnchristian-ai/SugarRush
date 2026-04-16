@@ -1,33 +1,3 @@
-// WeaponSwapZone.cs
-// Sugar Rush — Unity 6.3 LTS + NGO v2.1+
-//
-// Place one WeaponSwapZone in each team's base (same setup as DeliveryZone).
-// Shooters can only open the weapon inventory (B key) while standing inside.
-//
-// WHY NOT OnTriggerEnter:
-//   Players use CharacterController — no Rigidbody — so trigger events never fire.
-//   Physics.OverlapBox every 0.1s is the correct pattern for this project.
-//   (Same reason DeliveryZone uses it.)
-//
-// WHY NOT NetworkBehaviour:
-//   This is pure client-side UI gating. The server never needs to know that
-//   a player is browsing their loadout. No network traffic is generated.
-//
-// WHY isTrigger = true (set in Awake):
-//   If the Box Collider is solid (isTrigger = false), it becomes a physical
-//   surface. The player's ground check (Physics.CheckSphere with groundMask)
-//   won't detect it as ground because the zone is on the wrong layer, so
-//   _isGrounded stays false — allowing infinite jumping and broken gravity
-//   while standing inside the zone. Forcing isTrigger = true in Awake makes
-//   the collider invisible to physics while keeping Physics.OverlapBox
-//   detection working perfectly.
-//
-// SETUP (see tutorial):
-//   1. Add an empty GameObject inside your team's base.
-//   2. Add a Box Collider (any size). isTrigger is forced on by this script.
-//   3. Attach this script. Set ownerTeam and playerLayer in the Inspector.
-//   4. Repeat for the other team's base.
-
 using Unity.Netcode;
 using UnityEngine;
 
@@ -43,17 +13,13 @@ public class WeaponSwapZone : MonoBehaviour
 
     private Collider          _col;
     private float             _timer;
-    private ShooterController _occupant; // the local shooter currently inside
+    private ShooterController _occupant; 
 
     private void Awake()
     {
         _col = GetComponent<Collider>();
 
-        // Force isTrigger so this collider never acts as a physical surface.
-        // A solid collider here breaks the player's ground detection (CheckSphere
-        // uses groundMask and won't recognise this layer), causing infinite
-        // jumping and wrong gravity inside the zone.
-        // Physics.OverlapBox detects triggers just fine, so detection is unaffected.
+        
         if (_col != null) _col.isTrigger = true;
     }
 
@@ -81,21 +47,21 @@ public class WeaponSwapZone : MonoBehaviour
         {
             PlayerStats ps = hit.GetComponent<PlayerStats>();
             if (ps == null)                            continue;
-            if (!ps.IsOwner)                           continue; // only react to the local player
-            if (ps.team.Value  != ownerTeam)           continue; // wrong team
-            if (ps.role.Value  != PlayerRole.Shooter)  continue; // collectors can't swap weapons
+            if (!ps.IsOwner)                           continue; 
+            if (ps.team.Value  != ownerTeam)           continue; 
+            if (ps.role.Value  != PlayerRole.Shooter)  continue; 
             if (ps.IsDead())                           continue;
 
             ShooterController sc = hit.GetComponent<ShooterController>();
             if (sc != null) { found = sc; break; }
         }
 
-        // Only notify on change — don't spam SetInSwapZone every 0.1s
+        
         if (found == _occupant) return;
 
-        _occupant?.SetInSwapZone(false); // tell the previous occupant they left
+        _occupant?.SetInSwapZone(false); 
         _occupant = found;
-        _occupant?.SetInSwapZone(true);  // tell the new occupant they entered
+        _occupant?.SetInSwapZone(true);  
     }
 
     private void OnDrawGizmos()
@@ -103,7 +69,7 @@ public class WeaponSwapZone : MonoBehaviour
         if (_col == null) _col = GetComponent<Collider>();
         if (_col == null) return;
 
-        // Blue for Team A, Red for Team B — matches DeliveryZone colour coding
+        
         Gizmos.color = ownerTeam == TeamID.TeamA
             ? new Color(0.2f, 0.5f, 1f, 0.25f)
             : new Color(1f, 0.3f, 0.2f, 0.25f);
@@ -111,7 +77,7 @@ public class WeaponSwapZone : MonoBehaviour
         Gizmos.matrix = Matrix4x4.TRS(_col.bounds.center, transform.rotation, Vector3.one);
         Gizmos.DrawCube(Vector3.zero, _col.bounds.size);
 
-        // Solid outline so it's visible even when not selected
+        
         Gizmos.color = ownerTeam == TeamID.TeamA
             ? new Color(0.2f, 0.5f, 1f, 0.8f)
             : new Color(1f, 0.3f, 0.2f, 0.8f);

@@ -1,6 +1,3 @@
-// BazookaWeapon.cs
-// Sugar Rush — Unity 6.3 LTS + NGO v2.1+
-
 using UnityEngine;
 
 public class BazookaWeapon : WeaponBase
@@ -25,9 +22,7 @@ public class BazookaWeapon : WeaponBase
         maxAmmo      = 4;
         reloadTime   = 4f;
 
-        // FIX: base.Awake() runs _currentAmmo = magazineSize BEFORE we set
-        // magazineSize above, so it captures WeaponBase's default (30) instead
-        // of our value (1). Re-initialize here now that our stats are final.
+        
         _currentAmmo = magazineSize;
         _totalAmmo   = maxAmmo;
     }

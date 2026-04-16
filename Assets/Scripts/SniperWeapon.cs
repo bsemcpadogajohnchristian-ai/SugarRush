@@ -1,6 +1,3 @@
-// SniperWeapon.cs
-// Sugar Rush — Unity 6.3 LTS + NGO v2.1+
-
 using UnityEngine;
 using Unity.Netcode;
 
@@ -22,11 +19,7 @@ public class SniperWeapon : WeaponBase
         maxAmmo      = 20;
         reloadTime   = 3.2f;
 
-        // FIX: base.Awake() runs _currentAmmo = magazineSize BEFORE we set
-        // magazineSize above, so it captures WeaponBase's default (30) instead
-        // of our value (5). This caused the HUD to display 30 (rifle's count)
-        // on the sniper until the first reload reassigned _currentAmmo = magazineSize.
-        // Re-initialize here now that our stats are final.
+        
         _currentAmmo = magazineSize;
         _totalAmmo   = maxAmmo;
     }

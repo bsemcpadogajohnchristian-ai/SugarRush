@@ -1,6 +1,3 @@
-// HUDManager.cs
-// Sugar Rush — Unity 6.3 LTS + NGO v2.1+
-
 using System.Collections;
 using UnityEngine;
 using UnityEngine.UI;
@@ -44,10 +41,10 @@ public class HUDManager : MonoBehaviour
 
     [Header("Inventory")]
     [Tooltip("Drag the InventoryPanel root GameObject from HUDCanvas here.")]
-    public GameObject  inventoryPanel;   // the root panel to show/hide
-    public InventoryUI inventoryUI;      // the InventoryUI component on that panel
+    public GameObject  inventoryPanel;   
+    public InventoryUI inventoryUI;      
 
-    // Cached references for cleanup
+    
     private PlayerStats         _player;
     private WeaponBase          _trackedWeapon;
     private CollectorController _trackedCollector;
@@ -65,15 +62,13 @@ public class HUDManager : MonoBehaviour
         if (notificationText) notificationText.text = "";
         reloadText?.gameObject.SetActive(false);
 
-        // Always start with the inventory panel hidden.
-        // It will be shown only when the player presses B inside a SwapZone.
+        
         SetInventoryVisible(false);
     }
 
     private void OnDestroy() { if (Instance == this) Instance = null; }
 
-    // ── Single entry point ────────────────────────────────────────────────────
-
+    
     public void ResetAndInitialize(PlayerStats ps)
     {
         Cleanup();
@@ -113,19 +108,13 @@ public class HUDManager : MonoBehaviour
         }
     }
 
-    // ── Inventory visibility ──────────────────────────────────────────────────
-
-    /// <summary>
-    /// Shows or hides the inventory panel on HUDCanvas.
-    /// Called by ShooterController — never directly by InventoryUI or WeaponSwapZone.
-    /// </summary>
+    
     public void SetInventoryVisible(bool show)
     {
         if (inventoryPanel != null) inventoryPanel.SetActive(show);
     }
 
-    // ── Game manager wiring ───────────────────────────────────────────────────
-
+    
     private void WireGameManager()
     {
         NetworkGameManager ngm = NetworkGameManager.Instance;
@@ -197,8 +186,7 @@ public class HUDManager : MonoBehaviour
 
     public void ResetInitialization() => Cleanup();
 
-    // ── Weapon wiring helpers ─────────────────────────────────────────────────
-
+    
     private void WireWeapon(WeaponBase w)
     {
         _trackedWeapon = w;
@@ -264,8 +252,7 @@ public class HUDManager : MonoBehaviour
         }
     }
 
-    // ── UI update methods ─────────────────────────────────────────────────────
-
+    
     private void UpdateScore(int a, int b)
     {
         if (teamAScoreText) teamAScoreText.text = $"Team A: {a}";
@@ -312,14 +299,14 @@ public class HUDManager : MonoBehaviour
 
     private void ShowReloadText()
     {
-        if (ammoText)   ammoText.gameObject.SetActive(false); // hide ammo count while reloading
+        if (ammoText)   ammoText.gameObject.SetActive(false); 
         if (reloadText) reloadText.gameObject.SetActive(true);
     }
 
     private void HideReloadText()
     {
         if (reloadText) reloadText.gameObject.SetActive(false);
-        if (ammoText)   ammoText.gameObject.SetActive(true);  // restore ammo count when done
+        if (ammoText)   ammoText.gameObject.SetActive(true);  
     }
 
     private void ShowWinner(TeamID w) =>
@@ -342,36 +329,23 @@ public class HUDManager : MonoBehaviour
         if (swapZonePrompt != null) swapZonePrompt.SetActive(show);
     }
 
-    /// <summary>
-    /// Called by ShooterController.EquipWeapon every time a weapon is equipped —
-    /// whether from clicking a card, pressing 1–4, or the initial equip on spawn.
-    ///
-    /// Does two things:
-    ///   1. Highlights the correct card in the inventory UI.
-    ///   2. Rewires ammo-change / reload events to the newly active weapon so the
-    ///      ammo counter always reflects the gun currently in hand.
-    ///
-    /// Safe to call before the HUD is initialized (_player null-check handles that).
-    /// </summary>
+    
     public void NotifyWeaponChanged(int index)
     {
-        // 1 — highlight the selected inventory card
+        
         inventoryUI?.SetSelected(index);
 
-        // 2 — rewire ammo display to the new weapon
-        //     Skip if _player isn't set yet (called during prefab OnNetworkSpawn
-        //     before ResetAndInitialize has run — RefreshShooterAmmo will handle it).
+        
         if (_player == null) return;
 
         ShooterController sc = _player.GetComponent<ShooterController>();
         WeaponBase w = sc?.GetCurrentWeapon();
-        if (w == null || w == _trackedWeapon) return; // same weapon — no rewire needed
+        if (w == null || w == _trackedWeapon) return; 
 
         if (_trackedWeapon != null)
         {
-            // Safety net: ShooterController.EquipWeapon calls CancelReload() before
-            // reaching here, which fires onReloadEnd → HideReloadText() automatically.
-            // This explicit check covers any edge-case call path that bypasses that flow.
+            
+            
             if (_trackedWeapon.IsReloading())
                 HideReloadText();
 

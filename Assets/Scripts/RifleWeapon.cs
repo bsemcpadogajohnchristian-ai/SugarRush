@@ -1,6 +1,3 @@
-// RifleWeapon.cs
-// Sugar Rush — Unity 6.3 LTS + NGO v2.1+
-
 using UnityEngine;
 using Unity.Netcode;
 
@@ -21,11 +18,7 @@ public class RifleWeapon : WeaponBase
         maxAmmo      = 90;
         reloadTime   = 2f;
 
-        // FIX: base.Awake() runs _currentAmmo = magazineSize BEFORE we set
-        // magazineSize above, so it captures WeaponBase's default (30) instead
-        // of our value. Re-initialize here now that our stats are final.
-        // (Rifle happens to share the default of 30, but the fix is applied
-        // consistently across all weapons for correctness.)
+        
         _currentAmmo = magazineSize;
         _totalAmmo   = maxAmmo;
     }

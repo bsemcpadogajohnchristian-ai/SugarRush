@@ -1,12 +1,12 @@
-// Rocket.cs
-// Sugar Rush — Unity 6.3 LTS + NGO v2.1+
-// Server-spawned projectile. Only the server moves it and triggers explosion.
-
 using Unity.Netcode;
 using UnityEngine;
 
 public class Rocket : NetworkBehaviour
 {
+    
+    
+    private const float ARM_DELAY = 0.15f;
+
     private float      _speed;
     private float      _splashRadius;
     private float      _splashDamage;
@@ -15,6 +15,7 @@ public class Rocket : NetworkBehaviour
     private GameObject _impactFX;
     private TeamID     _firingTeam;
     private bool       _exploded;
+    private bool       _armed;      
     private Rigidbody  _rb;
 
     private void Awake() => _rb = GetComponent<Rigidbody>();
@@ -31,12 +32,19 @@ public class Rocket : NetworkBehaviour
         _firingTeam   = team;
 
         if (_rb != null) _rb.linearVelocity = transform.forward * _speed;
+
+        
+        Invoke(nameof(Arm), ARM_DELAY);
         Invoke(nameof(TimeoutExplode), 10f);
     }
 
+    
+    private void Arm() => _armed = true;
+
     private void OnCollisionEnter(Collision col)
     {
-        if (!IsServer || _exploded) return;
+        
+        if (!IsServer || _exploded || !_armed) return;
         Explode(col.contacts[0].point);
     }
 

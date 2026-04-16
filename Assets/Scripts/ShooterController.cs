@@ -1,11 +1,8 @@
-// ShooterController.cs
-// Sugar Rush
-// Unity 6.3 LTS + Netcode for GameObjects v2.1+
-
 using System.Collections;
 using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
+using UnityEngine.Events;
 
 public class ShooterController : NetworkBehaviour
 {
@@ -17,14 +14,16 @@ public class ShooterController : NetworkBehaviour
     public float  defaultFOV = 70f;
     public float  scopedFOV  = 30f;
 
-    // NOTE: inventoryUI has been REMOVED from this prefab component.
-    // The inventory panel now lives on HUDCanvas (a scene object) and is
-    // controlled exclusively through HUDManager.Instance.SetInventoryVisible().
-    // ShooterController never touches the panel GameObject directly.
+    
+    public UnityEvent<int>  onWeaponEquipped = new();
+
+    
+    public UnityEvent<bool> onScopeChanged   = new();
 
     private WeaponBase  _current;
     private int         _currentIndex;
     private bool        _isScoped;
+    private bool        _prevScoped;
     private bool        _inventoryOpen;
     private bool        _inSwapZone;
     private PlayerStats _stats;
@@ -38,16 +37,25 @@ public class ShooterController : NetworkBehaviour
         if (!IsOwner) { enabled = false; return; }
         EquipWeapon(0);
 
-        // Make sure the inventory panel is hidden on spawn.
-        // HUDManager may not be ready yet on the very first frame,
-        // so we hide it one frame later (same pattern as InitHUDWhenReady).
         HUDManager.Instance?.SetInventoryVisible(false);
 
-        // HUD may have run ResetAndInitialize before this OnNetworkSpawn fired
-        // (NGO component order is not guaranteed). Re-wire the ammo panel now
-        // that we have a confirmed current weapon.
         if (HUDManager.Instance != null)
             HUDManager.Instance.RefreshShooterAmmo(this);
+    }
+
+    public override void OnNetworkDespawn()
+    {
+        
+        if (_current != null)
+        {
+            _current.onFired.RemoveListener(OnCurrentWeaponFired);
+            _current.onReloadStart.RemoveListener(OnCurrentWeaponReloadStart);
+            _current.onReloadEnd.RemoveListener(OnCurrentWeaponReloadEnd);
+        }
+
+        
+        if (_stats != null && IsOwner)
+            _stats.isReloadingNV.Value = false;
     }
 
     private void Update()
@@ -57,10 +65,10 @@ public class ShooterController : NetworkBehaviour
         HandleScope();
         HandleReload();
         HandleInventory();
+        HandleQuickSwap();
     }
 
-    // ── Input handling ────────────────────────────────────────────────────────
-
+    
     private void HandleFire()
     {
         if (_inventoryOpen || _current == null) return;
@@ -72,9 +80,24 @@ public class ShooterController : NetworkBehaviour
     {
         if (_current is not SniperWeapon sniper) return;
 
-        if (Input.GetMouseButtonDown(1)) { _isScoped = !_isScoped; StartCoroutine(SmoothFOV(_isScoped ? scopedFOV : defaultFOV)); }
-        if (Input.GetMouseButtonUp(1) && _isScoped) { _isScoped = false; StartCoroutine(SmoothFOV(defaultFOV)); }
+        if (Input.GetMouseButtonDown(1))
+        {
+            _isScoped = !_isScoped;
+            StartCoroutine(SmoothFOV(_isScoped ? scopedFOV : defaultFOV));
+        }
+        if (Input.GetMouseButtonUp(1) && _isScoped)
+        {
+            _isScoped = false;
+            StartCoroutine(SmoothFOV(defaultFOV));
+        }
+
         sniper.isScoped = _isScoped;
+
+        if (_isScoped != _prevScoped)
+        {
+            onScopeChanged?.Invoke(_isScoped);
+            _prevScoped = _isScoped;
+        }
     }
 
     private IEnumerator SmoothFOV(float target)
@@ -100,25 +123,22 @@ public class ShooterController : NetworkBehaviour
         Cursor.lockState = _inventoryOpen ? CursorLockMode.None : CursorLockMode.Locked;
     }
 
-    // ── Called by WeaponSwapZone and InventoryUI ──────────────────────────────
+    private void HandleQuickSwap()
+    {
+        if (Input.GetKeyDown(KeyCode.Alpha1)) EquipWeapon(0);
+        else if (Input.GetKeyDown(KeyCode.Alpha2)) EquipWeapon(1);
+        else if (Input.GetKeyDown(KeyCode.Alpha3)) EquipWeapon(2);
+        else if (Input.GetKeyDown(KeyCode.Alpha4)) EquipWeapon(3);
+    }
 
-    /// <summary>
-    /// Called by WeaponSwapZone. Shows/hides the swap prompt and auto-closes
-    /// the inventory if the player walks out mid-selection.
-    /// </summary>
+    
     public void SetInSwapZone(bool inside)
     {
         _inSwapZone = inside;
         HUDManager.Instance?.ShowSwapZonePrompt(inside);
-
-        if (!inside && _inventoryOpen)
-            CloseInventory();
+        if (!inside && _inventoryOpen) CloseInventory();
     }
 
-    /// <summary>
-    /// Called by InventoryUI when the player selects a weapon.
-    /// Resets _inventoryOpen so the B-key toggle stays in sync.
-    /// </summary>
     public void CloseInventory()
     {
         _inventoryOpen = false;
@@ -126,40 +146,77 @@ public class ShooterController : NetworkBehaviour
         Cursor.lockState = CursorLockMode.Locked;
     }
 
-    // ── Weapon equip ──────────────────────────────────────────────────────────
-
+    
     public void EquipWeapon(int index)
     {
         if (index < 0 || index >= availableWeapons.Count) return;
 
-        // ── Cancel any in-progress reload BEFORE SetActive(false) ────────────
-        //
-        // SetActive(false) kills all coroutines on the weapon silently.
-        // Without this call, _isReloading stays true on the old weapon with no
-        // coroutine to ever clear it. Switching back → TryFire sees _isReloading
-        // == true → gun refuses to fire permanently.
-        //
-        // CancelReload() stops the coroutine, resets _isReloading, and fires
-        // onReloadEnd — which drives HideReloadText() on the HUD automatically.
+        
+        if (_current != null)
+            _current.onFired.RemoveListener(OnCurrentWeaponFired);
+
+        
         _current?.CancelReload();
-
-        // Refill the departing weapon to a full magazine so when the player
-        // returns to it later it is always ready to fire at full capacity.
         _current?.RefillAmmo();
-
         _current?.gameObject.SetActive(false);
+
+        
+        if (_current != null)
+        {
+            _current.onReloadStart.RemoveListener(OnCurrentWeaponReloadStart);
+            _current.onReloadEnd.RemoveListener(OnCurrentWeaponReloadEnd);
+        }
+
+        
         _currentIndex = index;
         _current = availableWeapons[index];
         _current.gameObject.SetActive(true);
-        if (_isScoped) { _isScoped = false; playerCamera.fieldOfView = defaultFOV; }
 
-        // Tell the HUD: re-wire ammo events and highlight the correct inventory card.
-        // Safe to call before HUDManager is ready — the ?. guard handles null.
+        
+        _current.onFired.AddListener(OnCurrentWeaponFired);
+        _current.onReloadStart.AddListener(OnCurrentWeaponReloadStart);
+        _current.onReloadEnd.AddListener(OnCurrentWeaponReloadEnd);
+
+        
+        if (_stats != null)
+        {
+            _stats.isReloadingNV.Value = false;
+
+            
+            _stats.equippedWeaponIndex.Value = _currentIndex;
+        }
+
+        if (_isScoped) { _isScoped = false; _prevScoped = false; playerCamera.fieldOfView = defaultFOV; }
+
+        
+        onWeaponEquipped?.Invoke(_currentIndex);
+
+        
         HUDManager.Instance?.NotifyWeaponChanged(index);
     }
 
-    // ── Server RPCs (damage) ──────────────────────────────────────────────────
+    
+    private void OnCurrentWeaponFired()
+    {
+        if (_stats != null)
+            _stats.shootFireSequence.Value++;
+    }
 
+    
+    private void OnCurrentWeaponReloadStart()
+    {
+        if (_stats != null)
+            _stats.isReloadingNV.Value = true;
+    }
+
+    
+    private void OnCurrentWeaponReloadEnd()
+    {
+        if (_stats != null)
+            _stats.isReloadingNV.Value = false;
+    }
+
+    
     [Rpc(SendTo.Server)]
     public void RegisterHitServerRpc(ulong targetId, float dmg)
     {
@@ -189,8 +246,7 @@ public class ShooterController : NetworkBehaviour
         }
     }
 
-    // ── NotOwner FX RPCs ──────────────────────────────────────────────────────
-
+    
     [Rpc(SendTo.NotOwner)]
     public void BroadcastMuzzleFlashRpc(int weaponIndex)
     {
@@ -216,8 +272,7 @@ public class ShooterController : NetworkBehaviour
         for (int i = 0; i < count; i++) w?.SpawnImpactFX(points[i], normals[i]);
     }
 
-    // ── Rocket (Bazooka) ──────────────────────────────────────────────────────
-
+    
     [Rpc(SendTo.Server)]
     public void SpawnRocketServerRpc(Vector3 pos, Quaternion rot,
         float speed, float splashRadius, float splashDmg, float directDmg)

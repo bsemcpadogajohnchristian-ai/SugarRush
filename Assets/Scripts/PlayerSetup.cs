@@ -1,10 +1,3 @@
-// PlayerSetup.cs
-// Sugar Rush
-// Unity 6.3 LTS + Netcode for GameObjects v2.1+
-//
-// Runs on every spawned player. Enables/disables role components
-// and wires the HUD once the server-assigned role syncs to this client.
-
 using Unity.Netcode;
 using UnityEngine;
 
@@ -19,23 +12,31 @@ public class PlayerSetup : NetworkBehaviour
     public Camera        playerCamera;
     public AudioListener audioListener;
 
-    [Header("Animator (optional)")]
+    [Header("Animator (optional — on root)")]
     public Animator animator;
 
     [Header("Role Models")]
-    [Tooltip("The Body child GameObject that holds the Shooter mesh.")]
+    [Tooltip("The Body child that holds the Shooter mesh and ShooterAnimator.")]
     public GameObject bodyShooter;
-    [Tooltip("The Body child GameObject that holds the Collector mesh.")]
+    [Tooltip("The Body child that holds the Collector mesh and CollectorAnimator.")]
     public GameObject bodyCollector;
 
-    [Header("First-Person Arms (Collector only)")]
-    [Tooltip("The first-person arm/hand mesh. Must be a child of CameraHolder. " +
-             "Only visible to the local owner. Assign the root GameObject of the FP arms mesh.")]
+    [Header("First-Person Arms — Collector")]
+    [Tooltip("fpArms root (child of CameraHolder). MUST start INACTIVE.\n" +
+             "When assigned, the Collector owner's bodyCollector renderer is\n" +
+             "hidden (they see FP arms instead).")]
     public GameObject fpArms;
 
-    [Tooltip("The secondary camera that renders ONLY the Arms layer on top of the scene. " +
-             "Must be a child of CameraHolder. Set Clear Flags=Depth Only, Depth=1, " +
-             "Culling Mask=Arms only. Leave empty if not using the layer-camera system.")]
+    [Header("First-Person Arms — Shooter")]
+    [Tooltip("fpShooterArms root (child of CameraHolder). MUST start INACTIVE.\n" +
+             "When assigned, the Shooter owner's bodyShooter renderer is hidden.\n" +
+             "Leave unassigned while testing TPP — body stays visible.")]
+    public GameObject fpShooterArms;
+
+    [Tooltip("Secondary camera — Depth Only, Depth=1, Culling Mask=Arms only.\n" +
+             "Only activated when matching FP arms object is assigned.\n" +
+             "IMPORTANT: If this field is left NULL but an ArmsCamera exists in\n" +
+             "the prefab and is active, it will paint over MainCamera.")]
     public Camera armsCamera;
 
     private PlayerStats _stats;
@@ -44,7 +45,7 @@ public class PlayerSetup : NetworkBehaviour
     {
         _stats = GetComponent<PlayerStats>();
 
-        // Disable camera immediately so non-owner players don't see a flash
+        
         if (playerCamera  != null) playerCamera.gameObject.SetActive(false);
         if (audioListener != null) audioListener.enabled = false;
     }
@@ -58,44 +59,24 @@ public class PlayerSetup : NetworkBehaviour
             Cursor.lockState = CursorLockMode.Locked;
         }
 
-        // FP arms are ONLY for the local owner — hide them on all other clients.
-        // Each client has their own prefab instance; setting active false locally
-        // does not affect what other clients render on their own instances.
-        if (fpArms != null)
-            fpArms.SetActive(IsOwner);
-
-        // The arms camera only needs to run on the local owner.
-        if (armsCamera != null)
-            armsCamera.gameObject.SetActive(IsOwner);
-
         _stats.role.OnValueChanged += OnRoleChanged;
         _stats.team.OnValueChanged += OnTeamChanged;
 
-        // Always apply the role to enable the correct components immediately.
         ApplyRole(_stats.role.Value);
 
-        // CRITICAL NGO GOTCHA: NetworkVariable.OnValueChanged does NOT fire on a client
-        // if the replicated value equals the variable's constructor default.
-        // PlayerRole.Shooter == 0 == default(PlayerRole), so a client assigned as Shooter
-        // will NEVER receive OnRoleChanged, and their HUD will never initialize.
-        //
-        // Fix: always call ResetAndInitialize on the owner directly here.
-        // OnRoleChanged calls it again if the server later changes the role (e.g. Collector),
-        // but for the Shooter case this is the only place it fires.
+        
         if (IsOwner)
             StartCoroutine(InitHUDWhenReady());
     }
 
-    // Defer one frame so ShooterController.OnNetworkSpawn and NGM.Instance have
-    // had a chance to run before we wire the HUD.
     private System.Collections.IEnumerator InitHUDWhenReady()
     {
-        yield return null; // wait one frame
+        yield return null; 
         HUDManager hud = HUDManager.Instance;
         if (hud != null)
             hud.ResetAndInitialize(_stats);
         else
-            Debug.LogWarning("[PlayerSetup] HUDManager.Instance is null after one frame — is HUDCanvas in GameScene?");
+            Debug.LogWarning("[PlayerSetup] HUDManager.Instance is null after one frame.");
     }
 
     public override void OnNetworkDespawn()
@@ -107,10 +88,6 @@ public class PlayerSetup : NetworkBehaviour
     private void OnRoleChanged(PlayerRole prev, PlayerRole next)
     {
         ApplyRole(next);
-
-        // Re-initialize HUD if the role changes after initial spawn.
-        // Note: for the initial assignment, InitHUDWhenReady() handles it,
-        // because NGO won't fire OnValueChanged if the value equals the default (0 = Shooter).
         if (IsOwner)
         {
             HUDManager hud = HUDManager.Instance;
@@ -126,59 +103,75 @@ public class PlayerSetup : NetworkBehaviour
     private void ApplyRole(PlayerRole role)
     {
         bool shooter = role == PlayerRole.Shooter;
+
+        
         if (shooterController   != null) shooterController.enabled   = shooter;
         if (collectorController != null) collectorController.enabled = !shooter;
 
-        // Swap visible model based on role.
+        
         if (bodyShooter   != null) bodyShooter.SetActive(shooter);
         if (bodyCollector != null) bodyCollector.SetActive(!shooter);
 
-        // ── FP arms / body renderer visibility ────────────────────────────────
-        //
-        // LOCAL OWNER sees:   FP arms (hands) — NOT their own 3rd-person body
-        // OTHER clients see:  The 3rd-person body — NOT the FP arms
-        //
-        // We achieve this by toggling the body's Renderer components only on
-        // the owner's local instance. Other clients have their own prefab copies
-        // where the Renderer is still enabled — they see the body normally.
-        if (IsOwner && !shooter && bodyCollector != null)
+        
+        bool shooterFPReady   = IsOwner && shooter  && fpShooterArms != null;
+        bool collectorFPReady = IsOwner && !shooter && fpArms        != null;
+
+        if (fpShooterArms != null) fpShooterArms.SetActive(shooterFPReady);
+        if (fpArms        != null) fpArms.SetActive(collectorFPReady);
+
+        
+        bool needArmsCamera = shooterFPReady || collectorFPReady;
+        if (armsCamera != null) armsCamera.gameObject.SetActive(needArmsCamera);
+
+        
+        if (bodyShooter != null)
         {
-            // Hide every renderer on the 3rd-person collector body from the owner's view
-            foreach (Renderer r in bodyCollector.GetComponentsInChildren<Renderer>())
-                r.enabled = false;
-        }
-        else if (!IsOwner && bodyCollector != null)
-        {
-            // Non-owner always sees the 3rd-person body
-            foreach (Renderer r in bodyCollector.GetComponentsInChildren<Renderer>())
-                r.enabled = true;
+            if (IsOwner && shooterFPReady)
+            {
+                
+                foreach (Renderer r in bodyShooter.GetComponentsInChildren<Renderer>())
+                    r.enabled = false;
+            }
+            else if (!IsOwner)
+            {
+                
+                foreach (Renderer r in bodyShooter.GetComponentsInChildren<Renderer>())
+                    r.enabled = true;
+            }
+            
+            
         }
 
-        // ── Main camera culling mask: exclude "Arms" layer ────────────────────
-        // This stops the FP arms from appearing through walls via the main camera.
-        // The armsCamera (depth-only, higher depth) renders them on top correctly.
+        
+        if (bodyCollector != null)
+        {
+            if (IsOwner && collectorFPReady)
+            {
+                
+                foreach (Renderer r in bodyCollector.GetComponentsInChildren<Renderer>())
+                    r.enabled = false;
+            }
+            else if (!IsOwner)
+            {
+                
+                foreach (Renderer r in bodyCollector.GetComponentsInChildren<Renderer>())
+                    r.enabled = true;
+            }
+            
+        }
+
+        
         if (IsOwner && playerCamera != null)
         {
             int armsLayer = LayerMask.NameToLayer("Arms");
             if (armsLayer >= 0)
-                playerCamera.cullingMask &= ~(1 << armsLayer);  // exclude Arms layer
+                playerCamera.cullingMask &= ~(1 << armsLayer);
         }
 
+        
         if (animator != null && animator.isInitialized)
         {
             animator.SetInteger("RoleID", (int)role);
-
-            // BUG FIX — Death-state reset guard:
-            //   ApplyRole is called on every client whenever the role NetworkVariable
-            //   syncs (OnNetworkSpawn, OnRoleChanged).  The old code unconditionally
-            //   called ResetTrigger("Die") and SetBool("IsDead", false), which
-            //   cleared the animator's death pose even when the player was actually
-            //   dead — causing the corpse to visually snap back to idle.
-            //
-            //   The Die trigger and IsDead bool are owned by CollectorAnimator /
-            //   the player's death flow; ApplyRole should never touch them while
-            //   the player is dead.  Only reset them when the player is alive so
-            //   a fresh role assignment starts from a clean, non-dead animator state.
             if (_stats == null || !_stats.IsDead())
             {
                 animator.ResetTrigger("Die");

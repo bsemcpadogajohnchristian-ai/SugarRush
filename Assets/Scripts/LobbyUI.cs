@@ -1,10 +1,3 @@
-// LobbyUI.cs
-// Sugar Rush
-// Unity 6.3 LTS + Netcode for GameObjects v2.1+
-//
-// Pure UI script. No networking. Attach to a Canvas in LobbyScene.
-// Wire all fields in the Inspector.
-
 using Unity.Netcode;
 using Unity.Netcode.Transports.UTP;
 using UnityEngine;

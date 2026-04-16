@@ -5,10 +5,40 @@
 // Handles local player movement, look, jump, crouch.
 // Owner-only. Non-owners are disabled immediately.
 //
-// INSPECTOR SETUP:
-//   groundCheck  — empty child GameObject placed at the player's feet
-//   groundMask   — LayerMask set to your "Ground" layer
-//   cameraHolder — the child Transform that holds the Camera
+// ── SCRIPT EXECUTION ORDER ────────────────────────────────────────────────
+//
+//   [DefaultExecutionOrder(-50)] ensures PlayerController.Move() — and
+//   critically the _ccContact update at the END of Move() — always runs
+//   BEFORE CollectorAnimator.Update() in the same frame.
+//
+//   Without this guarantee, CollectorAnimator could read HasGroundContact()
+//   BEFORE PlayerController has processed the current frame's collision,
+//   causing a 1-frame delay on the landing animation trigger.
+//
+//   CollectorAnimator uses [DefaultExecutionOrder(50)] to run after.
+//
+// ── ZERO-FRAME LANDING DELAY FIX (_ccContact placement) ──────────────────
+//
+//   PREVIOUS BEHAVIOUR:
+//     _ccContact was computed at the TOP of Move(), using _lastMoveFlags from
+//     the PREVIOUS frame's CC.Move(). On the exact landing frame:
+//       • _lastMoveFlags(N-1) had no CollisionFlags.Below (was falling)
+//       • CheckSphere might not reach the floor yet (0.08 m radius)
+//     → HasGroundContact() returned false on the landing frame itself.
+//     → CollectorAnimator saw IsGrounded = false for 1 extra frame (~16 ms).
+//
+//   FIX:
+//     _ccContact is now computed at the BOTTOM of Move(), AFTER _cc.Move()
+//     and the post-move velocity snaps. It now includes:
+//       • _lastMoveFlags from THIS frame's CC.Move() (CollisionFlags.Below
+//         is set on the exact landing frame)
+//       • CheckSphere at the character's NEW position after moving
+//     → HasGroundContact() returns true on the SAME frame the capsule
+//        contacts the floor. Zero-frame delay. ✓
+//
+//   NOTE: _isGrounded (the generous 0.3 m sphere used for jump/coyote logic)
+//   remains at the TOP of Move() — intentional, that generous tolerance is
+//   correct for jump/coyote/movement logic and must not be changed.
 //
 // ── JUMP SYSTEM (Professional 3-part fix) ────────────────────────────────
 //
@@ -106,27 +136,18 @@
 //     correctly set on the exact frame the capsule contacts a stair tread,
 //     keeping _isGrounded stable throughout stair climbing.
 //
-// ── LAND-FIRES-EARLY FIX (HasGroundContact) ──────────────────────────────
+// ── NETWORK VARIABLE WRITE GUARD ─────────────────────────────────────────
 //
-//   PROBLEM — Land animation fires before visual feet touch ground:
-//     _isGrounded uses Physics.CheckSphere with groundRadius = 0.3 m.
-//     The sphere fires when the floor is within 0.3 m of groundCheck —
-//     meaning IsAirborne() returns false up to 0.3 m BEFORE the character's
-//     feet visually reach the surface. CollectorAnimator reads IsAirborne()
-//     for the landing signal, so the Land trigger fires too early.
-//
-//   FIX — HasGroundContact():
-//     Exposes (_lastMoveFlags & CollisionFlags.Below) as a separate getter.
-//     The CC's own collision solver sets CollisionFlags.Below on the exact
-//     frame the capsule bottom contacts the floor — matching what the player
-//     sees. CollectorAnimator uses HasGroundContact() for owner landing
-//     detection instead of IsAirborne(), giving frame-perfect Land triggers.
-//     CheckSphere (_isGrounded) is kept for jump/coyote/movement logic where
-//     the generous radius is a feature, not a bug.
+//   _stats.isSprinting.Value is now only written when the value changes.
+//   Without this guard it was written every frame while sprinting (~60/s),
+//   dirtying the NetworkVariable and generating unnecessary replication
+//   traffic. Owner-writable NVs still have a replication cost even from the
+//   owner side. The guard reduces that to 2 writes per sprint (start + stop).
 
 using Unity.Netcode;
 using UnityEngine;
 
+[DefaultExecutionOrder(-50)]   // must run before CollectorAnimator (order +50)
 [RequireComponent(typeof(CharacterController))]
 public class PlayerController : NetworkBehaviour
 {
@@ -158,7 +179,7 @@ public class PlayerController : NetworkBehaviour
     public Transform groundCheck;
     [Tooltip("Sphere radius for grounded detection. Used for jump/coyote logic. " +
              "Keep at ~0.3 for generous ground tolerance. " +
-             "Landing animation uses HasGroundContact() (CC collision only) for frame-perfect accuracy.")]
+             "Landing animation uses HasGroundContact() (updated post-Move) for zero-frame accuracy.")]
     public float     groundRadius = 0.3f;
     public LayerMask groundMask;
 
@@ -190,9 +211,16 @@ public class PlayerController : NetworkBehaviour
     private float   _airSpeed;
 
     // CollisionFlags from the CURRENT frame's combined CC.Move.
-    // Used alongside CheckSphere for _isGrounded, and exposed via
-    // HasGroundContact() for frame-perfect landing animation detection.
+    // Kept as a field so _ccContact can be updated at the END of Move()
+    // without needing to pass it as a return value.
     private CollisionFlags _lastMoveFlags;
+
+    // ── Zero-frame landing contact ─────────────────────────────────────────────
+    // Updated at the BOTTOM of Move(), AFTER CC.Move() runs.
+    // This ensures HasGroundContact() returns true on the exact landing frame —
+    // no one-frame delay. CollectorAnimator reads this via HasGroundContact().
+    // DO NOT read this before CC.Move() runs (it reflects post-move collision).
+    private bool _ccContact;
 
     // Stores the camera's local position when standing so we always lerp
     // back to the exact same place regardless of where cameraHolder starts.
@@ -207,23 +235,25 @@ public class PlayerController : NetworkBehaviour
     private const float JUMP_BUFFER_TIME = 0.15f;
     private const float COYOTE_TIME      = 0.10f;
 
+    // ── Tight-radius contact threshold ────────────────────────────────────────
+    // Much smaller than groundRadius so the Land animation trigger fires on the
+    // exact frame the capsule bottom visually touches the floor, not 0.3 m early.
+    // Set to ~CC skinWidth (default 0.08 m).
+    // Only used for HasGroundContact() — NOT for jump/coyote logic.
+    private const float LANDING_CONTACT_RADIUS = 0.08f;
+
     private float _jumpBufferTimer;
     private float _coyoteTimer;
     private bool  _hasJumped;
 
     // ── Landing camera bob ────────────────────────────────────────────────────
-    // _landingBobOffset: current additional camera Y offset.
-    //   Set negative on the landing frame, lerped toward 0 every frame (spring).
-    // _wasGroundedLastFrame: detects the airborne→grounded transition.
     private float _landingBobOffset;
     private bool  _wasGroundedLastFrame;
 
     // Minimum downward velocity (m/s, negative) to trigger any landing bob.
-    // -3 m/s ignores gentle steps; real jump landings always exceed this.
-    private const float LANDING_BOB_THRESHOLD = -3f;
+    private const float LANDING_BOB_THRESHOLD  = -3f;
 
     // Fall speed at which the bob reaches its full landingBobAmount.
-    // Falls faster than this are clamped so the camera never over-dips.
     private const float LANDING_BOB_FULL_SPEED = -20f;
 
     private void Awake()
@@ -280,29 +310,26 @@ public class PlayerController : NetworkBehaviour
         // true fall speed, not the clamped -2f value written below.
         float velYAtFrameStart = _velocity.y;
 
-        // ── Ground check ──────────────────────────────────────────────────────
-        // Use BOTH CheckSphere AND last frame's CollisionFlags.Below.
-        // CheckSphere alone can miss the landing frame when the sphere just barely
-        // doesn't reach the floor (e.g. character 0.31 m up, sphere radius 0.30 m).
-        // CollisionFlags.Below fills that gap — if CC.Move hit the floor last frame,
-        // we treat this frame as grounded immediately so the velocity snap fires.
+        // ── Ground check position ─────────────────────────────────────────────
         Vector3 checkPos = groundCheck != null
             ? groundCheck.position
             : transform.position + Vector3.down * (_cc.height * 0.5f);
 
-        _isGrounded = Physics.CheckSphere(checkPos, groundRadius, groundMask, QueryTriggerInteraction.Ignore)
+        // ── _isGrounded: generous 0.3 m sphere ───────────────────────────────
+        // Used for: jump execution, coyote time, velocity snap, sprint detection.
+        // Intentionally generous — catches the floor even when walking off ledge.
+        // Also OR's with PREVIOUS frame's CollisionFlags.Below as a fallback so
+        // the first CC contact frame is never missed by the sphere alone.
+        _isGrounded = Physics.CheckSphere(checkPos, groundRadius, groundMask,
+                          QueryTriggerInteraction.Ignore)
                    || (_lastMoveFlags & CollisionFlags.Below) != 0;
 
         // ── Landing camera bob — trigger ──────────────────────────────────────
-        // Fires on the exact frame we transition from airborne → grounded,
-        // provided the fall was fast enough to feel like a real landing.
         bool justLanded = _isGrounded && !_wasGroundedLastFrame
                        && velYAtFrameStart < LANDING_BOB_THRESHOLD;
 
         if (justLanded)
         {
-            // Scale the dip proportionally to fall speed.
-            // Clamp01 so extremely fast falls don't push the camera into geometry.
             float t = Mathf.Clamp01(velYAtFrameStart / LANDING_BOB_FULL_SPEED);
             _landingBobOffset = -(t * landingBobAmount);
         }
@@ -346,9 +373,65 @@ public class PlayerController : NetworkBehaviour
         float v = Input.GetAxis("Vertical");
 
         bool hasMovementInput = Mathf.Abs(h) > 0.01f || Mathf.Abs(v) > 0.01f;
-        _isSprinting = _isGrounded && Input.GetKey(KeyCode.LeftShift) && !_isCrouching && hasMovementInput;
 
-        _stats.isSprinting.Value = _isSprinting;
+        // ── Write animation NVs (owner-only) ──────────────────────────────────
+        //
+        // isMovingNV and localMoveDir let ShooterAnimator drive the 3rd-person
+        // body on remote clients without using position-delta velocity, which
+        // oscillates at NetworkTransform update boundaries and causes the
+        // "animation going back and forth" visual artifact.
+        //
+        // Both NVs are guarded so they are only written when the value actually
+        // changes — avoiding unnecessary replication dirty-marking every frame.
+
+        // isMovingNV — true while the owner has movement input.
+        //
+        // ── WHY _isGrounded IS REMOVED ────────────────────────────────────────
+        // The previous check (hasMovementInput && _isGrounded) caused the
+        // "animation going back and forth" bug on non-owner clients:
+        //
+        //   • _isGrounded uses a generous 0.3 m sphere, which briefly returns
+        //     false for 1-2 frames when the capsule rides over slightly bumpy
+        //     terrain (small ramps, seams between mesh tiles, etc.).
+        //   • Each brief false toggles isMovingNV → NV replicates immediately
+        //     → non-owner's ShooterAnimator reads isMovingNV = false
+        //     → targetSpeed snaps to 0 → _smoothedSpeed dips toward Idle
+        //     → next frame _isGrounded is true again → targetSpeed = 1 or 2
+        //     → _smoothedSpeed climbs back → visible flicker on every step.
+        //
+        // Airborne locomotion suppression on non-owners is already handled in
+        // ShooterAnimator via isAirborneForLocomotion (_jumpForceAirborneTimer),
+        // which only activates on an actual jumpSequence increment — never on
+        // ground-sphere noise. The IsGrounded animator bool and Jump state-
+        // machine transitions also remain unaffected (they use separate paths).
+        // Removing _isGrounded here eliminates the flicker source entirely.
+        bool isCurrentlyMoving = hasMovementInput;
+        if (isCurrentlyMoving != _stats.isMovingNV.Value)
+            _stats.isMovingNV.Value = isCurrentlyMoving;
+
+        // localMoveDir — raw (h, v) in local space for the crouch blend tree.
+        // Written with a 0.05 magnitude guard so micro-jitter on an analog stick
+        // does not dirty the NV every frame.
+        if (hasMovementInput)
+        {
+            Vector2 dir = new Vector2(h, v);
+            if (dir.sqrMagnitude > 1f) dir.Normalize();
+            if (Vector2.Distance(dir, _stats.localMoveDir.Value) > 0.05f)
+                _stats.localMoveDir.Value = dir;
+        }
+        else if (_stats.localMoveDir.Value != Vector2.zero)
+        {
+            _stats.localMoveDir.Value = Vector2.zero;
+        }
+
+        bool wantSprint = _isGrounded && Input.GetKey(KeyCode.LeftShift) && !_isCrouching && hasMovementInput;
+
+        // ── Only write NetworkVariable when sprint state actually changes ──────
+        if (wantSprint != _isSprinting)
+        {
+            _isSprinting             = wantSprint;
+            _stats.isSprinting.Value = wantSprint;
+        }
 
         float speed;
         if (_isGrounded)
@@ -367,42 +450,51 @@ public class PlayerController : NetworkBehaviour
         // ── Gravity ───────────────────────────────────────────────────────────
         _velocity.y += gravity * Time.deltaTime;
 
-        // ── TERMINAL VELOCITY CAP (stuck-after-jump fix) ──────────────────────
-        // Clamps the downward velocity so CharacterController.Move() never
-        // receives a displacement large enough to confuse the CC CCD solver.
+        // ── Terminal velocity cap (stuck-after-jump fix) ───────────────────────
         _velocity.y = Mathf.Max(_velocity.y, terminalVelocity);
 
-        // ── STAIR FIX: Single combined CC.Move ────────────────────────────────
-        //
-        // OLD: Two separate CC.Move calls (horizontal first, vertical second).
-        //   _lastMoveFlags only captured the second (gravity-only) call.
-        //   When the CC auto-stepped up a stair on the first (horizontal) call,
-        //   CollisionFlags.Below was set there but DISCARDED. The second call
-        //   after the step might not contact the floor yet (1 frame gap while
-        //   the character is 1 mm above the new tread). Result: _lastMoveFlags
-        //   had no Below → _isGrounded = false for 1-2 frames per stair tread
-        //   → IsAirborne() = true → walk animation stopped on every step.
-        //
-        // FIX: Combine horizontal and vertical into one Vector3, one CC.Move.
-        //   CollisionFlags.Below is now correctly set on the SAME frame the
-        //   capsule contacts a stair tread, keeping _isGrounded = true
-        //   throughout stair climbing and preventing animation flickers.
+        // ── Single combined CC.Move (stair fix) ───────────────────────────────
+        // Combines horizontal + vertical into one call. CollisionFlags.Below is
+        // set on the SAME frame the capsule contacts a stair tread.
         Vector3 motion = (transform.right * h + transform.forward * v) * speed * Time.deltaTime;
         motion.y = _velocity.y * Time.deltaTime;
         _lastMoveFlags = _cc.Move(motion);
 
-        // ── Same-frame collision velocity snap ────────────────────────────────
-        // CollisionFlags.Below is set by CC.Move in the SAME FRAME the floor is
-        // hit. Snapping here prevents the large negative velocity from persisting
-        // into the next frame's gravity accumulation, eliminating the
-        // depenetration bounce entirely.
+        // ── Post-move velocity snaps ───────────────────────────────────────────
+        // Floor: prevents the large negative velocity from persisting into the
+        //        next frame's gravity accumulation (eliminates depenetration bounce).
         if ((_lastMoveFlags & CollisionFlags.Below) != 0 && _velocity.y < 0f)
             _velocity.y = -2f;
 
-        // Ceiling hit: zero upward velocity immediately so the character doesn't
-        // stick to ceilings for 1-2 frames while gravity catches up.
+        // Ceiling: zero upward velocity so the character doesn't stick for 1-2 frames.
         if ((_lastMoveFlags & CollisionFlags.Above) != 0 && _velocity.y > 0f)
             _velocity.y = 0f;
+
+        // ── _ccContact: updated HERE, after CC.Move, for zero-frame delay ──────
+        //
+        // Why here and not at the top of Move():
+        //   At the top, _lastMoveFlags is from the PREVIOUS frame. On the exact
+        //   landing frame, it has no CollisionFlags.Below yet — so _ccContact
+        //   would be false for one extra frame, causing a 1-frame delay in
+        //   HasGroundContact() and therefore in CollectorAnimator's IsGrounded.
+        //
+        //   By updating _ccContact AFTER CC.Move(), we use THIS frame's collision
+        //   result. The capsule has already moved to its final position, so:
+        //     • CheckSphere at the new position accurately reflects contact
+        //     • _lastMoveFlags has CollisionFlags.Below if the floor was hit
+        //   → HasGroundContact() returns true on the SAME frame as landing. ✓
+        //
+        //   _isGrounded (above) stays at the top of Move() — its generous 0.3 m
+        //   radius is intentional for jump/coyote logic and is not affected.
+        {
+            Vector3 contactPos = groundCheck != null
+                ? groundCheck.position
+                : transform.position + Vector3.down * (_cc.height * 0.5f);
+
+            _ccContact = Physics.CheckSphere(contactPos, LANDING_CONTACT_RADIUS, groundMask,
+                             QueryTriggerInteraction.Ignore)
+                      || (_lastMoveFlags & CollisionFlags.Below) != 0;
+        }
     }
 
     private void Crouch()
@@ -445,16 +537,12 @@ public class PlayerController : NetworkBehaviour
         if (cameraHolder != null)
         {
             // ── Landing bob spring ─────────────────────────────────────────────
-            // Lerp the offset toward 0 every frame. No coroutine, no allocation.
-            // Naturally composes with the crouch camera offset below.
             _landingBobOffset = Mathf.Lerp(_landingBobOffset, 0f, landingBobRecovery * Time.deltaTime);
 
             float targetY = _isCrouching
                 ? _camDefaultLocalPos.y + crouchCameraOffset
                 : _camDefaultLocalPos.y;
 
-            // Add the bob on top of the crouch target so both effects can be
-            // active simultaneously (e.g. landing while crouched still feels right).
             Vector3 target = new Vector3(
                 _camDefaultLocalPos.x,
                 Mathf.Lerp(cameraHolder.localPosition.y, targetY + _landingBobOffset, crouchLerp * Time.deltaTime),
@@ -464,6 +552,8 @@ public class PlayerController : NetworkBehaviour
         }
     }
 
+    // ── Public getters ────────────────────────────────────────────────────────
+
     public bool IsSprinting() => _isSprinting;
     public bool IsCrouching() => _isCrouching;
     public bool IsGrounded()  => _isGrounded;
@@ -472,23 +562,18 @@ public class PlayerController : NetworkBehaviour
     public bool IsAirborne()  => !_isGrounded;
 
     /// <summary>
-    /// True on the exact frame CC.Move() reported a floor contact (CollisionFlags.Below).
+    /// True when the tight-radius contact sphere (LANDING_CONTACT_RADIUS = 0.08 m)
+    /// overlaps the ground layer, OR when CC.Move() reported a floor collision
+    /// this frame (CollisionFlags.Below).
     ///
-    /// MORE ACCURATE THAN IsAirborne() for landing animation detection:
-    ///   IsAirborne() uses _isGrounded which includes Physics.CheckSphere with
-    ///   groundRadius = 0.3 m — that sphere fires up to 0.3 m BEFORE the capsule
-    ///   visually touches the floor, causing the Land trigger to fire early.
+    /// Updated AFTER CC.Move() so it reflects THIS frame's collision — zero-frame
+    /// delay compared to the old placement at the top of Move().
     ///
-    ///   HasGroundContact() uses the CC's own collision solver (CollisionFlags.Below),
-    ///   which is set on the exact frame the capsule bottom contacts the floor.
-    ///   CollectorAnimator uses this for owner landing detection so the Land
-    ///   trigger fires on the visually correct frame.
-    ///
-    ///   IsAirborne() (CheckSphere) is kept for jump / coyote / movement logic
-    ///   where the generous detection radius is intentional — it prevents the
-    ///   player from being stranded when they walk off a ledge's edge by a hair.
+    /// CollectorAnimator uses this (via [DefaultExecutionOrder(50)], which runs
+    /// after this script's [DefaultExecutionOrder(-50)]) so it always reads the
+    /// current frame's result. The IsGrounded animator Bool is set from this.
     /// </summary>
-    public bool HasGroundContact() => (_lastMoveFlags & CollisionFlags.Below) != 0;
+    public bool HasGroundContact() => _ccContact;
 
     // ── Spawn warp ────────────────────────────────────────────────────────────
     [Rpc(SendTo.Owner)]
@@ -501,7 +586,8 @@ public class PlayerController : NetworkBehaviour
         _velocity = Vector3.zero;
 
         _airSpeed      = 0f;
-        _lastMoveFlags = CollisionFlags.None; // clear stale collision state from before warp
+        _lastMoveFlags = CollisionFlags.None;
+        _ccContact     = false;   // clear so no spurious landing signal on first frame
 
         if (_isCrouching)
         {
@@ -522,6 +608,11 @@ public class PlayerController : NetworkBehaviour
         _hasJumped       = false;
         _jumpBufferTimer = 0f;
         _coyoteTimer     = 0f;
+
+        // Clear animation NVs so remote clients don't see a stale "moving" state
+        // on the first frame after a respawn warp.
+        _stats.isMovingNV.Value  = false;
+        _stats.localMoveDir.Value = Vector2.zero;
 
         // Clear landing bob so a warp/respawn never plays a spurious dip.
         _landingBobOffset     = 0f;

@@ -1,28 +1,3 @@
-// DeliveryZone.cs
-// Sugar Rush — Unity 6.3 LTS + NGO v2.1+
-//
-// Place one DeliveryZone in each team's base. Set ownerTeam in the Inspector.
-// Attach a Collider (any shape) — IsTrigger does NOT need to be checked.
-// We use Physics.OverlapBox on the server every 0.1s.
-//
-// WHY NOT OnTriggerEnter:
-//   Unity requires at least one Rigidbody on the colliding pair.
-//   The player uses CharacterController (not Rigidbody), so the trigger
-//   never fires. Physics.OverlapBox on the server is authoritative and
-//   requires no Rigidbody.
-//
-// WHY NOT NetworkBehaviour:
-//   DeliveryZone is a static scene object. If its NetworkObject is not
-//   registered and spawned by NGO, IsServer is always false and every
-//   delivery attempt is silently dropped.
-//
-// DELIVERY GUARD:
-//   We do NOT use a HashSet to block re-delivery. Instead we rely on the
-//   fact that DeliverCandiesServer sets carriedCount to 0 immediately.
-//   The next tick sees GetCarriedCount() == 0 and skips — no double scoring.
-//   When the Collector picks up new candy and returns, carriedCount > 0 again
-//   and delivery fires correctly. Simple, stateless, always correct.
-
 using Unity.Netcode;
 using UnityEngine;
 
@@ -71,8 +46,7 @@ public class DeliveryZone : MonoBehaviour
 
             CollectorController col = hit.GetComponent<CollectorController>();
 
-            // GetCarriedCount() == 0 after a delivery, so this naturally
-            // prevents double-scoring without any ID tracking needed.
+            
             if (col == null || col.GetCarriedCount() <= 0) continue;
 
             int count = col.GetCarriedCount();

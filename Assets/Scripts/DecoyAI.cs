@@ -1,15 +1,3 @@
-// DecoyAI.cs
-// Sugar Rush — Unity 6.3 LTS + NGO v2.1+
-//
-// Client-side prediction using CharacterController on both server and client.
-//
-// KEY INSIGHT:
-//   We disable NetworkTransform on clients (they predict locally).
-//   Since NT is disabled, there is nothing fighting the CharacterController.
-//   So we can simply run CC.Move() on BOTH server and client with the same
-//   formula. CC.isGrounded works correctly on both. No raycasts. No hacks.
-//   This is the standard professional approach for deterministic objects.
-
 using System.Collections;
 using Unity.Netcode;
 using Unity.Netcode.Components;
@@ -25,8 +13,7 @@ public class DecoyAI : NetworkBehaviour
     [Header("Durability")]
     public int maxHits = 10;
 
-    // Set by CollectorController when the decoy is spawned.
-    // Used by ShooterController to prevent teammates from damaging their own decoy.
+    
     [HideInInspector] public TeamID ownerTeam;
 
     private CharacterController _cc;
@@ -48,9 +35,8 @@ public class DecoyAI : NetworkBehaviour
     {
         if (!IsServer)
         {
-            // Disable NetworkTransform so it doesn't fight our local CC simulation.
-            // CC stays ENABLED — it handles gravity and ground detection correctly
-            // on clients just as well as on the server.
+            
+            
             if (_nt != null) _nt.enabled = false;
         }
 
@@ -58,7 +44,7 @@ public class DecoyAI : NetworkBehaviour
             Activate();
     }
 
-    // Called by CollectorController after NetworkObject.Spawn()
+    
     public void InitializeMovement(Vector3 direction, float speed)
     {
         _dir   = direction.normalized;
@@ -67,8 +53,8 @@ public class DecoyAI : NetworkBehaviour
         if (IsServer)
         {
             Activate();
-            // Send initial state to all clients so they start predicting
-            // from the exact same position and parameters.
+            
+            
             InitStateClientRpc(transform.position, _dir, _speed);
         }
     }
@@ -76,14 +62,12 @@ public class DecoyAI : NetworkBehaviour
     [Rpc(SendTo.ClientsAndHost)]
     private void InitStateClientRpc(Vector3 spawnPos, Vector3 dir, float speed)
     {
-        if (IsServer) return; // server already handled above
+        if (IsServer) return; 
 
         _dir   = dir.normalized;
         _speed = speed;
 
-        // Teleport CC to the correct spawn position.
-        // Disable CC briefly so we can set position directly — CC fights
-        // transform.position writes when enabled.
+        
         _cc.enabled = false;
         transform.position = spawnPos;
         _cc.enabled = true;
@@ -104,7 +88,7 @@ public class DecoyAI : NetworkBehaviour
     {
         if (!_ready) return;
 
-        // Identical movement on server and client — CC handles everything.
+        
         Vector3 move = _dir * _speed * Time.deltaTime;
 
         if (_cc.isGrounded && _yVelocity < 0f)
@@ -116,11 +100,11 @@ public class DecoyAI : NetworkBehaviour
         _cc.Move(move);
     }
 
-    /// <param name="attackerTeam">Team of the shooter. Hits from the same team are ignored.</param>
+    
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
     public void TakeHitRpc(TeamID attackerTeam)
     {
-        // Friendly fire guard — teammates cannot destroy their own decoy.
+        
         if (attackerTeam == ownerTeam) return;
 
         _hits++;

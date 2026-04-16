@@ -1,25 +1,3 @@
-// InventoryUI.cs
-// Sugar Rush — Unity 6.3 LTS + NGO v2.1+
-//
-// Builds weapon selection cards entirely in code — no slot prefab needed.
-// Attach this component to the SlotRow child of InventoryPanel (see tutorial).
-// Assign slotContainer = this GameObject's own RectTransform.
-//
-// CARD LAYOUT (per weapon):
-//
-//  ┌─────────────────┐
-//  │ [1]             │  ← number badge, top-left
-//  │                 │
-//  │                 │  ← click anywhere on card to equip
-//  │─────────────────│  ← separator line
-//  │    RIFLE        │  ← weapon name, bottom
-//  └─────────────────┘
-//
-// SELECTION:
-//   • Clicking a card calls EquipWeapon + CloseInventory on ShooterController.
-//   • SetSelected(index) is called by HUDManager.NotifyWeaponChanged whenever
-//     the active weapon changes (from click OR from 1-4 quick keys).
-
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
@@ -47,8 +25,7 @@ public class InventoryUI : MonoBehaviour
     private ShooterController    _shooter;
     private readonly List<Image> _cardBGs = new();
 
-    // ── Public API ─────────────────────────────────────────────────────────────
-
+    
     public void Initialize(ShooterController shooter)
     {
         _shooter = shooter;
@@ -56,22 +33,18 @@ public class InventoryUI : MonoBehaviour
         Rebuild();
     }
 
-    /// <summary>
-    /// Highlights the card at <paramref name="index"/> as the currently equipped weapon.
-    /// Called by HUDManager.NotifyWeaponChanged after every EquipWeapon call.
-    /// </summary>
+    
     public void SetSelected(int index)
     {
         for (int i = 0; i < _cardBGs.Count; i++)
             _cardBGs[i].color = (i == index) ? colorSelected : colorNormal;
     }
 
-    // ── Internal ───────────────────────────────────────────────────────────────
-
+    
     private void EnsureLayout()
     {
-        // Add HorizontalLayoutGroup to slotContainer if not already present.
-        // This keeps all cards evenly spaced without any manual positioning.
+        
+        
         var hlg = slotContainer.GetComponent<HorizontalLayoutGroup>();
         if (hlg == null) hlg = slotContainer.gameObject.AddComponent<HorizontalLayoutGroup>();
         hlg.spacing                = cardSpacing;
@@ -94,18 +67,18 @@ public class InventoryUI : MonoBehaviour
 
     private void BuildCard(int index, WeaponBase weapon)
     {
-        // ── Root card ──────────────────────────────────────────────────────────
+        
         var rootRt = NewRect($"Card_{index}", slotContainer, cardWidth, cardHeight);
         var bg     = rootRt.gameObject.AddComponent<Image>();
         bg.color   = colorNormal;
         _cardBGs.Add(bg);
 
-        // LayoutElement lets HorizontalLayoutGroup know the card's preferred size.
+        
         var le = rootRt.gameObject.AddComponent<LayoutElement>();
         le.preferredWidth  = cardWidth;
         le.preferredHeight = cardHeight;
 
-        // ── Number badge (top-left, 26×26 px) ─────────────────────────────────
+        
         var badgeRt = NewRect("Badge", rootRt, 26f, 26f);
         badgeRt.anchorMin        = new Vector2(0, 1);
         badgeRt.anchorMax        = new Vector2(0, 1);
@@ -114,14 +87,14 @@ public class InventoryUI : MonoBehaviour
         badgeRt.gameObject.AddComponent<Image>().color = colorBadgeBg;
         AddTMP(badgeRt, (index + 1).ToString(), 13, bold: true, fill: true);
 
-        // ── Separator line ─────────────────────────────────────────────────────
+        
         var sepRt    = NewRect("Separator", rootRt, 0, 1);
         sepRt.anchorMin  = new Vector2(0.10f, 0.36f);
         sepRt.anchorMax  = new Vector2(0.90f, 0.36f);
         sepRt.sizeDelta  = new Vector2(0, 1);
         sepRt.gameObject.AddComponent<Image>().color = colorSep;
 
-        // ── Weapon name (bottom third of card) ─────────────────────────────────
+        
         var nameRt = NewRect("WeaponName", rootRt, 0, 0);
         nameRt.anchorMin = new Vector2(0,    0.04f);
         nameRt.anchorMax = new Vector2(1,    0.36f);
@@ -136,10 +109,10 @@ public class InventoryUI : MonoBehaviour
         nameTMP.enableWordWrapping = false;
         nameTMP.overflowMode     = TextOverflowModes.Ellipsis;
 
-        // ── Button (covers the whole card) ─────────────────────────────────────
+        
         var btn  = rootRt.gameObject.AddComponent<Button>();
         var cols = btn.colors;
-        cols.normalColor      = Color.white;          // multiplied with bg.color
+        cols.normalColor      = Color.white;          
         cols.highlightedColor = new Color(1.3f, 1.3f, 1.3f, 1f);
         cols.pressedColor     = new Color(0.8f, 0.8f, 0.8f, 1f);
         btn.colors            = cols;
@@ -148,13 +121,12 @@ public class InventoryUI : MonoBehaviour
         int captured = index;
         btn.onClick.AddListener(() =>
         {
-            _shooter.EquipWeapon(captured);     // equip + triggers NotifyWeaponChanged
-            _shooter.CloseInventory();          // hide panel, re-lock cursor
+            _shooter.EquipWeapon(captured);     
+            _shooter.CloseInventory();          
         });
     }
 
-    // ── Helpers ────────────────────────────────────────────────────────────────
-
+    
     private static RectTransform NewRect(string name, RectTransform parent, float w, float h)
     {
         var go = new GameObject(name);
