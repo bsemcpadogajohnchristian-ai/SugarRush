@@ -113,8 +113,11 @@ public class PlayerSetup : NetworkBehaviour
         if (bodyCollector != null) bodyCollector.SetActive(!shooter);
 
         
-        bool shooterFPReady   = IsOwner && shooter  && fpShooterArms != null;
-        bool collectorFPReady = IsOwner && !shooter && fpArms        != null;
+        // FP shooter arms are disabled for now.
+        // To re-enable: change this line to:
+        //   bool shooterFPReady = IsOwner && shooter && fpShooterArms != null;
+        bool shooterFPReady   = false;
+        bool collectorFPReady = IsOwner && !shooter && fpArms != null;
 
         if (fpShooterArms != null) fpShooterArms.SetActive(shooterFPReady);
         if (fpArms        != null) fpArms.SetActive(collectorFPReady);
@@ -128,18 +131,19 @@ public class PlayerSetup : NetworkBehaviour
         {
             if (IsOwner && shooterFPReady)
             {
-                
+                // FP arms active: hide the 3rd-person body so it doesn't clip the camera.
                 foreach (Renderer r in bodyShooter.GetComponentsInChildren<Renderer>())
                     r.enabled = false;
             }
-            else if (!IsOwner)
+            else
             {
-                
+                // Owner in 3rd-person (shooterFPReady = false) OR remote client:
+                // always show the body so ShooterAnimator has something to drive.
+                // Without this explicit enable, if the prefab renderers ever default
+                // to disabled the local owner's body becomes invisible.
                 foreach (Renderer r in bodyShooter.GetComponentsInChildren<Renderer>())
                     r.enabled = true;
             }
-            
-            
         }
 
         

@@ -424,6 +424,14 @@ public class PlayerController : NetworkBehaviour
             _stats.localMoveDir.Value = Vector2.zero;
         }
 
+        // isGroundedNV — mirrors _isGrounded for ShooterAnimator on remote clients.
+        // Guarded so it only dirties the NV on an actual state change (2 writes per
+        // ground contact event, not 60/s). ShooterAnimator reads this instead of
+        // deriving airborne state from position-delta Y-velocity, which is noisy at
+        // NetworkTransform update boundaries and causes IsGrounded to flicker on slopes.
+        if (_isGrounded != _stats.isGroundedNV.Value)
+            _stats.isGroundedNV.Value = _isGrounded;
+
         bool wantSprint = _isGrounded && Input.GetKey(KeyCode.LeftShift) && !_isCrouching && hasMovementInput;
 
         // ── Only write NetworkVariable when sprint state actually changes ──────
@@ -611,8 +619,9 @@ public class PlayerController : NetworkBehaviour
 
         // Clear animation NVs so remote clients don't see a stale "moving" state
         // on the first frame after a respawn warp.
-        _stats.isMovingNV.Value  = false;
+        _stats.isMovingNV.Value   = false;
         _stats.localMoveDir.Value = Vector2.zero;
+        _stats.isGroundedNV.Value = false;   // will be corrected on first Move() frame
 
         // Clear landing bob so a warp/respawn never plays a spurious dip.
         _landingBobOffset     = 0f;

@@ -6,7 +6,7 @@ using UnityEngine.Events;
 
 public class ShooterController : NetworkBehaviour
 {
-    [Header("Weapons (assign all weapon child GameObjects)")]
+    [Header("Weapons")]
     public List<WeaponBase> availableWeapons = new();
 
     [Header("Camera")]
@@ -45,7 +45,7 @@ public class ShooterController : NetworkBehaviour
 
     public override void OnNetworkDespawn()
     {
-        
+        // Clean up weapon listeners.
         if (_current != null)
         {
             _current.onFired.RemoveListener(OnCurrentWeaponFired);
@@ -53,9 +53,12 @@ public class ShooterController : NetworkBehaviour
             _current.onReloadEnd.RemoveListener(OnCurrentWeaponReloadEnd);
         }
 
-        
+        // Clear synced states so other clients don't see stale values.
         if (_stats != null && IsOwner)
+        {
             _stats.isReloadingNV.Value = false;
+            _stats.isAutoFiring.Value  = false;
+        }
     }
 
     private void Update()
@@ -72,8 +75,24 @@ public class ShooterController : NetworkBehaviour
     private void HandleFire()
     {
         if (_inventoryOpen || _current == null) return;
-        bool fire = _current.isAutomatic ? Input.GetMouseButton(0) : Input.GetMouseButtonDown(0);
-        if (fire) _current.TryFire(playerCamera);
+
+        if (_current.isAutomatic)
+        {
+            bool holding = Input.GetMouseButton(0);
+            if (holding) _current.TryFire(playerCamera);
+
+            // Only dirty the NV when the state actually changes to minimise bandwidth.
+            if (_stats != null && _stats.isAutoFiring.Value != holding)
+                _stats.isAutoFiring.Value = holding;
+        }
+        else
+        {
+            // Switching to a semi-auto weapon — make sure the bool is cleared.
+            if (_stats != null && _stats.isAutoFiring.Value)
+                _stats.isAutoFiring.Value = false;
+
+            if (Input.GetMouseButtonDown(0)) _current.TryFire(playerCamera);
+        }
     }
 
     private void HandleScope()
@@ -181,8 +200,9 @@ public class ShooterController : NetworkBehaviour
         if (_stats != null)
         {
             _stats.isReloadingNV.Value = false;
+            _stats.isAutoFiring.Value  = false;
 
-            
+            // Sync the new weapon slot to all clients for 3rd-person animator.
             _stats.equippedWeaponIndex.Value = _currentIndex;
         }
 

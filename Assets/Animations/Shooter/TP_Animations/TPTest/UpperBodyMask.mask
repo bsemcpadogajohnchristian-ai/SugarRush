@@ -12,29 +12,29 @@ AvatarMask:
   - m_Path: 
     m_Weight: 1
   - m_Path: Armature
-    m_Weight: 1
+    m_Weight: 0
   - m_Path: Armature/Hips
-    m_Weight: 1
+    m_Weight: 0
   - m_Path: Armature/Hips/LeftUpLeg
-    m_Weight: 1
+    m_Weight: 0
   - m_Path: Armature/Hips/LeftUpLeg/LeftLeg
-    m_Weight: 1
+    m_Weight: 0
   - m_Path: Armature/Hips/LeftUpLeg/LeftLeg/LeftFoot
-    m_Weight: 1
+    m_Weight: 0
   - m_Path: Armature/Hips/LeftUpLeg/LeftLeg/LeftFoot/LeftToeBase
-    m_Weight: 1
+    m_Weight: 0
   - m_Path: Armature/Hips/LeftUpLeg/LeftLeg/LeftFoot/LeftToeBase/LeftToe_End
-    m_Weight: 1
+    m_Weight: 0
   - m_Path: Armature/Hips/RightUpLeg
-    m_Weight: 1
+    m_Weight: 0
   - m_Path: Armature/Hips/RightUpLeg/RightLeg
-    m_Weight: 1
+    m_Weight: 0
   - m_Path: Armature/Hips/RightUpLeg/RightLeg/RightFoot
-    m_Weight: 1
+    m_Weight: 0
   - m_Path: Armature/Hips/RightUpLeg/RightLeg/RightFoot/RightToeBase
-    m_Weight: 1
+    m_Weight: 0
   - m_Path: Armature/Hips/RightUpLeg/RightLeg/RightFoot/RightToeBase/RightToe_End
-    m_Weight: 1
+    m_Weight: 0
   - m_Path: Armature/Hips/Spine
     m_Weight: 1
   - m_Path: Armature/Hips/Spine/Spine1
@@ -72,11 +72,11 @@ AvatarMask:
   - m_Path: head
     m_Weight: 1
   - m_Path: legs
-    m_Weight: 1
+    m_Weight: 0
   - m_Path: neck
     m_Weight: 1
   - m_Path: pants
-    m_Weight: 1
+    m_Weight: 0
   - m_Path: scarflower
     m_Weight: 1
   - m_Path: scarflower.001
@@ -88,6 +88,6 @@ AvatarMask:
   - m_Path: shirt
     m_Weight: 1
   - m_Path: shoes
-    m_Weight: 1
+    m_Weight: 0
   - m_Path: siko
     m_Weight: 1

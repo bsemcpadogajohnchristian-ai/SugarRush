@@ -1,5 +1,52 @@
 using UnityEngine;
 
+// ── FIX LOG (this version) ────────────────────────────────────────────────
+//
+//   BUG 1 FIX — LOCOMOTION_AIRBORNE_BUFFER increased from 0.05 s → 0.15 s.
+//     0.05 s = only 3 frames at 60 fps. Terrain seams or mesh-tile joints can
+//     keep HasGroundContact() false for 4-6 frames, expiring the buffer and
+//     snapping Speed to 0. 0.15 s = 9 frames, matching ShooterAnimator.
+//
+//   BUG 2 FIX — Owner rawAirborne: HasGroundContact() → IsGrounded().
+//     HasGroundContact() uses a 0.08 m (skin-width) radius sphere — designed
+//     specifically for zero-frame-accurate landing detection. That precision
+//     is the WRONG tool for the IsGrounded animator bool, which drives state
+//     machine transitions. A momentary gap between the capsule bottom and the
+//     floor (terrain seam, stair tread edge, mesh rounding) returns false for
+//     1-3 frames → H_IsGrounded flips false → animator can interrupt the
+//     Walk/Run state with a Jump transition → locomotion snaps to idle.
+//     IsGrounded() uses the generous 0.3 m sphere from PlayerController,
+//     which never flickers on normal walkable terrain.
+//
+//   BUG 3 FIX — Owner locomotion buffer: mirrors ShooterAnimator exactly.
+//     Previous code reset the buffer on !rawAirborne (buggy HasGroundContact
+//     source). Now uses isGroundedNV.Value (authoritative 0.3 m sphere from
+//     PlayerController._isGrounded) — the same stable source ShooterAnimator
+//     has used since its locomotion fix. This eliminates flicker even on
+//     uneven terrain.
+//
+//   BUG 4 FIX — Owner + non-owner speed: input-based / NV-based, not delta.
+//     Previous: speed gated by _smoothedHSpeed < walkThreshold (position-delta
+//     derived). For the owner this is stable but adds unnecessary lag; for
+//     non-owners it oscillates at NetworkTransform update boundaries (30 Hz),
+//     causing the blend tree to flicker between Idle and Walk every 2 frames.
+//     Fix mirrors ShooterAnimator:
+//       • Owner   → direct Input.GetAxis with inputDeadZone guard.
+//       • Non-owner → isMovingNV (NV written by PlayerController, never
+//                     oscillates) + MOVING_OFF_DEBOUNCE to prevent brief stops.
+//
+//   BUG 5 FIX — Animator.SetFloat dampTime replaced with explicit EMA.
+//     Unity's dampTime overload uses Mathf.SmoothDamp internally, which is a
+//     spring-damper that CAN OVERSHOOT. When the Speed float crosses the
+//     Idle/Walk threshold (1.0) or Walk/Run threshold (2.0) by even 0.001 for
+//     a single frame the blend tree snaps to the adjacent clip; the spring
+//     pulls back, overshoots again → flickering between clips.
+//     Fix: compute targetSpeed (0, 1, or 2) and apply a plain Mathf.Lerp EMA
+//     into _smoothedSpeed. Lerp never overshoots, making threshold crossings
+//     smooth and exactly once. Mirrors ShooterAnimator's existing approach.
+//
+// ─────────────────────────────────────────────────────────────────────────
+
 [DefaultExecutionOrder(50)]    
 [RequireComponent(typeof(Animator))]
 public class CollectorAnimator : MonoBehaviour
@@ -10,34 +57,47 @@ public class CollectorAnimator : MonoBehaviour
     public PlayerStats         playerStats;
 
     [Header("Standing speed thresholds")]
-    [Tooltip("Horizontal speed (m/s) below which the character is considered idle.\n" +
-             "0.5 prevents idle-jitter from micro-inputs or NT position noise.")]
-    public float walkThreshold = 0.5f;
+    [Tooltip("BUG 4 FIX: owner speed now uses direct input (inputDeadZone below).\n" +
+             "Non-owner speed now uses isMovingNV. This field is kept for Inspector\n" +
+             "compatibility only and is no longer used.")]
+    [HideInInspector]
+    public float walkThreshold = 0.5f;   // legacy — no longer read
+
+    [Header("Speed blend")]
+    [Tooltip("EMA factor for the Speed float sent to the 1D blend tree.\n" +
+             "BUG 5 FIX: replaces Unity's dampTime (SmoothDamp) which could overshoot\n" +
+             "blend-tree thresholds and cause Idle/Walk flickering.\n" +
+             "12 is a good default; range 8-15.")]
+    public float speedSmoothFactor = 12f;
+
+    [Header("Input dead zone (owner only)")]
+    [Tooltip("Raw Input.GetAxis dead zone. Axes below this are treated as no-input.\n" +
+             "0.15 matches Unity's default Input Manager dead zone.")]
+    public float inputDeadZone = 0.15f;
 
     [Header("Crouch blend normalisation")]
-    [Tooltip("Peak crouch speed (m/s) used to normalise CrouchMoveX/Y to -1..1.\n" +
-             "crouchSpeed(2.5) x collectorMult(1.3) = 3.25 — keep slightly above that.")]
-    public float crouchMaxSpeed = 3.0f;
+    [Tooltip("BUG 4 FIX: non-owner crouch direction now uses localMoveDir NV and no\n" +
+             "longer needs speed normalisation. Kept for Inspector compat only.")]
+    [HideInInspector]
+    public float crouchMaxSpeed = 3.0f;  // legacy — no longer read
 
     [Header("Airborne detection")]
     [Tooltip("Smoothed Y velocity (m/s) above which a non-owner is considered airborne.")]
     public float airborneYThreshold = 0.6f;
 
     [Tooltip("Seconds to hold IsAirborne = true after the signal drops (non-owners only).\n" +
-             "Bridges NT dead frames (30 Hz) so Jump_Start does not stutter.\n" +
-             "0.05 s is tuned for fast-gravity games (gravity <= -20).")]
+             "Bridges NT dead frames (30 Hz) so Jump_Start does not stutter.")]
     public float airborneHoldTime = 0.05f;
 
     [Header("Velocity smoothing")]
-    [Tooltip("EMA factor for horizontal speed used by the 1D blend tree.\n" +
-             "10-15 is a good range for 30 Hz NT with 60 Hz render.")]
+    [Tooltip("EMA factor for horizontal speed — used ONLY for non-owner airborne detection.\n" +
+             "No longer drives walk/idle switching (that now uses isMovingNV).")]
     public float hSpeedSmoothFactor = 12f;
 
-    [Tooltip("EMA factor for Y velocity used by non-owner airborne detection.\n" +
-             "20 rises quickly to catch jumps yet still bridges NT dead frames.")]
+    [Tooltip("EMA factor for Y velocity — non-owner airborne detection. ~20 recommended.")]
     public float yVelSmoothFactor = 20f;
 
-    [Tooltip("EMA factor for CrouchMoveX/Y on non-owners.\n" +
+    [Tooltip("EMA factor for CrouchMoveX/Y on owner AND non-owner.\n" +
              "6-8 is a good range. Too high = shaking; too low = laggy direction.")]
     public float crouchSmoothFactor = 7f;
 
@@ -51,8 +111,6 @@ public class CollectorAnimator : MonoBehaviour
     private static readonly int H_CrouchY      = Animator.StringToHash("CrouchMoveY");
     private static readonly int H_IsCrouching  = Animator.StringToHash("IsCrouching");
     private static readonly int H_IsSuperspeed = Animator.StringToHash("IsSuperspeed");
-    
-    
     private static readonly int H_IsGrounded   = Animator.StringToHash("IsGrounded");
     private static readonly int H_IsPickingUp  = Animator.StringToHash("IsPickingUp");
     private static readonly int H_IsDead       = Animator.StringToHash("IsDead");
@@ -64,8 +122,14 @@ public class CollectorAnimator : MonoBehaviour
     private Transform _root;
 
     private Vector3 _prevPos;
-    private float   _smoothedHSpeed;
-    private float   _smoothedYVel;      
+
+    // BUG 5 FIX: explicit EMA — replaces Animator.SetFloat dampTime.
+    // Plain Lerp never overshoots, so blend-tree thresholds are crossed
+    // smoothly and exactly once per locomotion state change.
+    private float _smoothedSpeed;
+
+    private float   _smoothedHSpeed;   // non-owner airborne detection only
+    private float   _smoothedYVel;
     private float   _smoothedLocalX;
     private float   _smoothedLocalZ;
     private float   _airborneBuffer;
@@ -76,25 +140,32 @@ public class CollectorAnimator : MonoBehaviour
     private bool    _subscribedToRespawn;
     private int     _lastJumpSequence;
     private bool    _wasSuperspeed;
+    private bool    _wasAirborne;
 
-    
-    private bool _wasAirborne;
-
-    
-    private float _jumpForceAirborneTimer;
+    private float       _jumpForceAirborneTimer;
     private const float JUMP_FORCE_AIRBORNE_TIME = 0.15f;
 
-    
-    private float _prevRawVelY;         
+    private float _prevRawVelY;
     private float _nonOwnerLandLatch;
     private const float NON_OWNER_LAND_LATCH_TIME = 0.15f;
 
     private const float TELEPORT_THRESHOLD = 3f;
 
-    
+    // BUG 1 FIX: increased from 0.05 s → 0.15 s.
+    // 0.05 s = 3 frames at 60 fps; terrain seams last 4-6 frames, expiring
+    // the buffer and snapping Speed to 0. 0.15 s = 9 frames matches
+    // ShooterAnimator and is robust against all normal ground irregularities.
     private float _ownerLocomotionAirborneBuffer;
     private float _nonOwnerLocomotionAirborneBuffer;
-    private const float LOCOMOTION_AIRBORNE_BUFFER = 0.05f;  
+    private const float LOCOMOTION_AIRBORNE_BUFFER = 0.15f;
+
+    // BUG 4 FIX: debounces for non-owner NV-based movement/sprint detection.
+    // Mirrors the same constants in ShooterAnimator.
+    private float       _movingOffDebounce;
+    private const float MOVING_OFF_DEBOUNCE = 0.12f;
+
+    private float       _sprintOffDebounce;
+    private const float SPRINT_OFF_DEBOUNCE = 0.10f;
 
     
     private void Awake()
@@ -169,6 +240,7 @@ public class CollectorAnimator : MonoBehaviour
     
     private void ResetRuntimeState()
     {
+        _smoothedSpeed                    = 0f;
         _smoothedHSpeed                   = 0f;
         _smoothedYVel                     = 0f;
         _airborneBuffer                   = 0f;
@@ -181,6 +253,8 @@ public class CollectorAnimator : MonoBehaviour
         _nonOwnerLandLatch                = 0f;
         _ownerLocomotionAirborneBuffer    = 0f;
         _nonOwnerLocomotionAirborneBuffer = 0f;
+        _movingOffDebounce                = 0f;
+        _sprintOffDebounce                = 0f;
     }
 
     
@@ -203,7 +277,7 @@ public class CollectorAnimator : MonoBehaviour
         }
 
         
-        float jumpDist = Vector3.Distance(_root.position, _prevPos);
+        float jumpDist = UnityEngine.Vector3.Distance(_root.position, _prevPos);
         if (jumpDist > TELEPORT_THRESHOLD)
         {
             _prevPos = _root.position;
@@ -211,11 +285,12 @@ public class CollectorAnimator : MonoBehaviour
         }
 
         
-        Vector3 worldVel = (_root.position - _prevPos) / Time.deltaTime;
+        UnityEngine.Vector3 worldVel = (_root.position - _prevPos) / UnityEngine.Time.deltaTime;
         _prevPos = _root.position;
 
-        float rawHSpeed = new Vector3(worldVel.x, 0f, worldVel.z).magnitude;
-        _smoothedHSpeed = Mathf.Lerp(_smoothedHSpeed, rawHSpeed, hSpeedSmoothFactor * Time.deltaTime);
+        float rawHSpeed = new UnityEngine.Vector3(worldVel.x, 0f, worldVel.z).magnitude;
+        _smoothedHSpeed = UnityEngine.Mathf.Lerp(_smoothedHSpeed, rawHSpeed,
+            hSpeedSmoothFactor * UnityEngine.Time.deltaTime);
 
         
         if (playerStats.IsDead())
@@ -224,12 +299,11 @@ public class CollectorAnimator : MonoBehaviour
             _anim.SetFloat(H_Speed,       0f);
             _anim.SetFloat(H_CrouchX,     0f);
             _anim.SetFloat(H_CrouchY,     0f);
-            
-            
             _anim.SetBool(H_IsGrounded,   true);
             _anim.SetBool(H_IsCrouching,  false);
             _anim.SetBool(H_IsSuperspeed, false);
             _anim.SetBool(H_IsPickingUp,  false);
+            _smoothedSpeed = 0f;
             _wasSuperspeed = false;
             return;
         }
@@ -244,13 +318,13 @@ public class CollectorAnimator : MonoBehaviour
             if (now > _lastCarriedCount) _pickupTimer = pickupDuration;
             _lastCarriedCount = now;
         }
-        if (_pickupTimer > 0f) _pickupTimer -= Time.deltaTime;
+        if (_pickupTimer > 0f) _pickupTimer -= UnityEngine.Time.deltaTime;
         _anim.SetBool(H_IsPickingUp, _pickupTimer > 0f);
 
         
         bool isSuperspeed = collectorController != null
             && collectorController.superSpeedActive.Value
-            && _smoothedHSpeed >= walkThreshold;
+            && _smoothedHSpeed >= 0.5f;  // 0.5 keeps using velocity here (non-critical, superspeed is a known state)
 
         _anim.SetBool(H_IsSuperspeed, isSuperspeed);
 
@@ -260,65 +334,62 @@ public class CollectorAnimator : MonoBehaviour
         if (jumpJustFired)
         {
             _jumpForceAirborneTimer           = JUMP_FORCE_AIRBORNE_TIME;
-            _nonOwnerLandLatch                = 0f;   
+            _nonOwnerLandLatch                = 0f;
             _ownerLocomotionAirborneBuffer    = 0f;
             _nonOwnerLocomotionAirborneBuffer = 0f;
         }
         else if (_jumpForceAirborneTimer > 0f)
         {
-            _jumpForceAirborneTimer -= Time.deltaTime;
+            _jumpForceAirborneTimer -= UnityEngine.Time.deltaTime;
         }
 
+        // ── BUG 2 FIX: rawAirborne uses IsGrounded() (0.3 m) instead of
+        //   HasGroundContact() (0.08 m). The tight 0.08 m radius misses the
+        //   floor on terrain seams for 1-3 frames, flipping H_IsGrounded false
+        //   and interrupting the Walk/Run state machine. The 0.3 m sphere from
+        //   IsGrounded() is stable across all normal walkable terrain.
         bool rawAirborne;
         if (isOwner && playerController != null)
         {
-            
-            
-            rawAirborne = !playerController.HasGroundContact()
+            rawAirborne = !playerController.IsGrounded()
                        || _jumpForceAirborneTimer > 0f;
-
-            
         }
         else
         {
             
-            
-            _smoothedYVel = Mathf.Lerp(_smoothedYVel, worldVel.y, yVelSmoothFactor * Time.deltaTime);
+            _smoothedYVel = UnityEngine.Mathf.Lerp(_smoothedYVel, worldVel.y,
+                yVelSmoothFactor * UnityEngine.Time.deltaTime);
 
-            
             bool fastLanding = _prevRawVelY      < -airborneYThreshold
                             && worldVel.y >= -airborneYThreshold * 0.4f;
 
             if (fastLanding)
                 _nonOwnerLandLatch = NON_OWNER_LAND_LATCH_TIME;
             else if (_nonOwnerLandLatch > 0f)
-                _nonOwnerLandLatch -= Time.deltaTime;
+                _nonOwnerLandLatch -= UnityEngine.Time.deltaTime;
 
             _prevRawVelY = worldVel.y;
 
-            
-            rawAirborne = (Mathf.Abs(_smoothedYVel) > airborneYThreshold
-                       ||  _jumpForceAirborneTimer  > 0f)
+            rawAirborne = (UnityEngine.Mathf.Abs(_smoothedYVel) > airborneYThreshold
+                       ||  _jumpForceAirborneTimer > 0f)
                        && _nonOwnerLandLatch <= 0f;
         }
 
         bool isAirborne;
         if (isOwner && playerController != null)
         {
-            isAirborne = rawAirborne;   
+            isAirborne = rawAirborne;
         }
         else
         {
-            
             if (rawAirborne)
                 _airborneBuffer = airborneHoldTime;
             else if (_airborneBuffer > 0f)
-                _airborneBuffer -= Time.deltaTime;
+                _airborneBuffer -= UnityEngine.Time.deltaTime;
 
             isAirborne = rawAirborne || _airborneBuffer > 0f;
         }
 
-        
         bool justLanded = _wasAirborne && !isAirborne;
         _wasAirborne = isAirborne;
 
@@ -328,7 +399,7 @@ public class CollectorAnimator : MonoBehaviour
         int currentSeq = playerStats.jumpSequence.Value;
         if (currentSeq != _lastJumpSequence)
         {
-            _lastJumpSequence = currentSeq;   
+            _lastJumpSequence = currentSeq;
 
             if (!justLanded)
             {
@@ -347,22 +418,25 @@ public class CollectorAnimator : MonoBehaviour
 
             if (isOwner)
             {
-                targetX = Input.GetAxis("Horizontal");
-                targetZ = Input.GetAxis("Vertical");
+                targetX = UnityEngine.Input.GetAxis("Horizontal");
+                targetZ = UnityEngine.Input.GetAxis("Vertical");
             }
             else
             {
-                Vector3 local   = _root.InverseTransformDirection(worldVel);
-                float rawLocalX = Mathf.Clamp(local.x / crouchMaxSpeed, -1f, 1f);
-                float rawLocalZ = Mathf.Clamp(local.z / crouchMaxSpeed, -1f, 1f);
-                _smoothedLocalX = Mathf.Lerp(_smoothedLocalX, rawLocalX, crouchSmoothFactor * Time.deltaTime);
-                _smoothedLocalZ = Mathf.Lerp(_smoothedLocalZ, rawLocalZ, crouchSmoothFactor * Time.deltaTime);
-                targetX = _smoothedLocalX;
-                targetZ = _smoothedLocalZ;
+                // BUG 4 FIX: use localMoveDir NV (written by PlayerController
+                // from raw input). No position-delta oscillation.
+                UnityEngine.Vector2 dir = playerStats.localMoveDir.Value;
+                targetX = dir.x;
+                targetZ = dir.y;
             }
 
-            _anim.SetFloat(H_CrouchX, targetX);
-            _anim.SetFloat(H_CrouchY, targetZ);
+            _smoothedLocalX = UnityEngine.Mathf.Lerp(_smoothedLocalX, targetX,
+                crouchSmoothFactor * UnityEngine.Time.deltaTime);
+            _smoothedLocalZ = UnityEngine.Mathf.Lerp(_smoothedLocalZ, targetZ,
+                crouchSmoothFactor * UnityEngine.Time.deltaTime);
+
+            _anim.SetFloat(H_CrouchX, _smoothedLocalX);
+            _anim.SetFloat(H_CrouchY, _smoothedLocalZ);
         }
         else
         {
@@ -372,51 +446,81 @@ public class CollectorAnimator : MonoBehaviour
             _anim.SetFloat(H_CrouchY, 0f);
         }
 
-        
+        // ── BUG 3 FIX: owner locomotion uses isGroundedNV.Value (stable 0.3 m
+        //   sphere) instead of rawAirborne (was derived from HasGroundContact).
+        //   Mirrors ShooterAnimator's locomotion path exactly.
         bool isAirborneForLocomotion;
         if (isOwner && playerController != null)
         {
-            if (!rawAirborne)
+            bool groundedForLocomotion = playerStats.isGroundedNV.Value
+                                      && _jumpForceAirborneTimer <= 0f;
+            if (groundedForLocomotion)
                 _ownerLocomotionAirborneBuffer = LOCOMOTION_AIRBORNE_BUFFER;
             else if (_ownerLocomotionAirborneBuffer > 0f)
-                _ownerLocomotionAirborneBuffer -= Time.deltaTime;
+                _ownerLocomotionAirborneBuffer -= UnityEngine.Time.deltaTime;
 
-            isAirborneForLocomotion = rawAirborne && _ownerLocomotionAirborneBuffer <= 0f;
+            isAirborneForLocomotion = !groundedForLocomotion
+                                   && _ownerLocomotionAirborneBuffer <= 0f;
         }
         else
         {
-            if (!rawAirborne)
+            bool groundedForLocomotion = playerStats.isGroundedNV.Value
+                                      && _jumpForceAirborneTimer <= 0f;
+            if (groundedForLocomotion)
                 _nonOwnerLocomotionAirborneBuffer = LOCOMOTION_AIRBORNE_BUFFER;
             else if (_nonOwnerLocomotionAirborneBuffer > 0f)
-                _nonOwnerLocomotionAirborneBuffer -= Time.deltaTime;
+                _nonOwnerLocomotionAirborneBuffer -= UnityEngine.Time.deltaTime;
 
-            isAirborneForLocomotion = isAirborne && _nonOwnerLocomotionAirborneBuffer <= 0f;
+            isAirborneForLocomotion = isAirborne
+                                   && _nonOwnerLocomotionAirborneBuffer <= 0f;
         }
+
+        // ── BUG 4 + 5 FIX: compute targetSpeed from stable sources, then
+        //   apply a plain Lerp EMA (never overshoots unlike SmoothDamp).
+        float targetSpeed;
 
         if (isAirborneForLocomotion || isCrouching)
         {
-            _anim.SetFloat(H_Speed, 0f);
+            targetSpeed = 0f;
+        }
+        else if (isOwner && playerController != null)
+        {
+            // Owner: read input directly — no position-delta lag.
+            float h        = UnityEngine.Input.GetAxis("Horizontal");
+            float v        = UnityEngine.Input.GetAxis("Vertical");
+            bool  hasInput = UnityEngine.Mathf.Abs(h) > inputDeadZone
+                          || UnityEngine.Mathf.Abs(v) > inputDeadZone;
+
+            if (!hasInput)
+                targetSpeed = 0f;
+            else
+                targetSpeed = (playerController.IsSprinting() || isSuperspeed) ? 2f : 1f;
         }
         else
         {
-            float speedParam;
-            if (_smoothedHSpeed < walkThreshold)
-            {
-                speedParam = 0f;
-            }
-            else if (isOwner && playerController != null)
-            {
-                speedParam = (playerController.IsSprinting() || isSuperspeed) ? 2f : 1f;
-            }
-            else
-            {
-                speedParam = (playerStats.isSprinting.Value || isSuperspeed) ? 2f : 1f;
-            }
+            // Non-owner: use isMovingNV (NV written by PlayerController from
+            // raw input — never oscillates at NT update boundaries).
+            bool nvIsMoving = playerStats.isMovingNV.Value;
+            if (nvIsMoving)
+                _movingOffDebounce = MOVING_OFF_DEBOUNCE;
+            else if (_movingOffDebounce > 0f)
+                _movingOffDebounce -= UnityEngine.Time.deltaTime;
+            bool isMoving = nvIsMoving || _movingOffDebounce > 0f;
 
-            bool  superspeedJustStarted = isSuperspeed && !_wasSuperspeed;
-            float dampTime              = superspeedJustStarted ? 0f : 0.1f;
-            _anim.SetFloat(H_Speed, speedParam, dampTime, Time.deltaTime);
+            bool nvIsSprinting = playerStats.isSprinting.Value;
+            if (nvIsSprinting)
+                _sprintOffDebounce = SPRINT_OFF_DEBOUNCE;
+            else if (_sprintOffDebounce > 0f)
+                _sprintOffDebounce -= UnityEngine.Time.deltaTime;
+            bool isSprintingDebounced = nvIsSprinting || _sprintOffDebounce > 0f;
+
+            targetSpeed = isMoving ? ((isSprintingDebounced || isSuperspeed) ? 2f : 1f) : 0f;
         }
+
+        // BUG 5 FIX: plain Lerp EMA — no SmoothDamp overshoot.
+        _smoothedSpeed = UnityEngine.Mathf.Lerp(_smoothedSpeed, targetSpeed,
+            speedSmoothFactor * UnityEngine.Time.deltaTime);
+        _anim.SetFloat(H_Speed, _smoothedSpeed);
 
         _wasSuperspeed = isSuperspeed;
     }

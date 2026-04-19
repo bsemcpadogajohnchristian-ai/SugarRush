@@ -86,6 +86,17 @@ public class PlayerStats : NetworkBehaviour
     public NetworkVariable<bool> isReloadingNV = new(false,
         NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Owner);
 
+    // isAutoFiring: true while the owner holds the fire button on an automatic weapon.
+    // Written by ShooterController.HandleFire() (owner-only, guarded on state change).
+    // Read by ShooterAnimator on ALL clients to drive the IsFiring bool parameter,
+    // keeping the upper-body animator inside UB_Fire for the full duration of
+    // automatic fire instead of using a per-bullet trigger (which stutters at
+    // fire rates faster than the animation clip length).
+    // FPShooterAnimator reads Input.GetMouseButton(0) directly instead of this NV
+    // since it only ever runs on the local owner.
+    public NetworkVariable<bool> isAutoFiring = new(false,
+        NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Owner);
+
     // ── LOCOMOTION ANIMATION NVs ──────────────────────────────────────────────
     //
     // These replace per-frame position-delta velocity on non-owner clients.
@@ -126,6 +137,20 @@ public class PlayerStats : NetworkBehaviour
     // crouch blend tree instead of the oscillating position-delta estimate.
     // X = strafe (left/right), Y = forward/backward. Range –1..1.
     public NetworkVariable<Vector2> localMoveDir = new(Vector2.zero,
+        NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Owner);
+
+    // isGroundedNV: true while the owner's CharacterController is grounded.
+    // Written by PlayerController.Move() (owner-only, guarded on state change).
+    // Read by CollectorAnimator on ALL clients to drive H_IsGrounded without
+    // position-delta Y-velocity noise — which oscillates at NetworkTransform
+    // update boundaries and produces false "airborne" signals on slopes,
+    // triggering animator state machine interrupts and locomotion glitch on
+    // non-owner clients. Same authoritative NV pattern as isMovingNV.
+    //
+    // NOTE: ShooterAnimator no longer reads this NV. The shooter animator uses
+    // a trigger-only jump system (Jump trigger → Jump Start → Jump Land) with
+    // no IsGrounded parameter. Only CollectorAnimator retains airborne detection.
+    public NetworkVariable<bool> isGroundedNV = new(true,
         NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Owner);
 
     // ── Inspector settings ────────────────────────────────────────────────────

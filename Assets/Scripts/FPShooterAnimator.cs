@@ -20,6 +20,7 @@ public class FPShooterAnimator : MonoBehaviour
     private static readonly int H_WeaponType   = Animator.StringToHash("WeaponType");
     private static readonly int H_Speed        = Animator.StringToHash("Speed");
     private static readonly int H_Fire         = Animator.StringToHash("Fire");
+    private static readonly int H_IsFiring     = Animator.StringToHash("IsFiring");
     private static readonly int H_Reload       = Animator.StringToHash("Reload");
     private static readonly int H_WeaponSwitch = Animator.StringToHash("WeaponSwitch");
     private static readonly int H_Jump         = Animator.StringToHash("Jump");
@@ -87,6 +88,18 @@ public class FPShooterAnimator : MonoBehaviour
         UpdateSpeed();
         UpdateScope();
         UpdateJump();
+        UpdateAutoFire();
+    }
+
+    private void UpdateAutoFire()
+    {
+        // Automatic weapons: hold IsFiring bool true while mouse is held.
+        // This keeps the FP arms animator inside the Fire loop state for the
+        // full burst duration instead of triggering per-bullet (which stutters).
+        // Semi-auto weapons: clear the bool so the Fire trigger drives the clip.
+        WeaponBase cur = shooterController?.GetCurrentWeapon();
+        bool isAuto    = cur != null && cur.isAutomatic;
+        _anim.SetBool(H_IsFiring, isAuto && Input.GetMouseButton(0));
     }
 
     private void UpdateSpeed()
@@ -175,6 +188,12 @@ public class FPShooterAnimator : MonoBehaviour
 
     private void OnFired()
     {
+        // Only use the Fire trigger for semi-auto weapons.
+        // Automatic weapons are handled by the IsFiring bool in UpdateAutoFire()
+        // so the animator stays inside the Fire loop state for the full burst.
+        WeaponBase cur = shooterController?.GetCurrentWeapon();
+        if (cur != null && cur.isAutomatic) return;
+
         _anim.ResetTrigger(H_Fire);
         _anim.SetTrigger(H_Fire);
     }
@@ -216,8 +235,9 @@ public class FPShooterAnimator : MonoBehaviour
         _anim.SetFloat(H_Speed,       0f);
         _anim.SetBool(H_IsScoped,     false);
         _anim.SetBool(H_IsReloading,  false);
+        _anim.SetBool(H_IsFiring,     false);
 
-        
+        // Re-track the current weapon so events are wired correctly after a reset.
         if (shooterController != null)
             TrackWeapon(shooterController.GetCurrentWeapon(),
                         shooterController.CurrentWeaponIndex);
