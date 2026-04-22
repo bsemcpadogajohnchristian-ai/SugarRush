@@ -17,7 +17,14 @@
 //   • Crouch   : H_IsCrouching (bool) + H_CrouchMoveX/Y for the 2D blend tree.
 //                Transitions in the animator MUST have Has Exit Time = OFF.
 //
-//   • Shooting : H_Fire (trigger) synced via shootFireSequence NV to all clients.
+//   • Shooting : Per-weapon fire triggers synced via shootFireSequence NV to all clients.
+//                  Rifle   (auto)  → IsFiring bool (held for burst duration)
+//                  Shotgun (semi)  → FireShotgun trigger
+//                  Sniper  (semi)  → FireSniper  trigger
+//                  Bazooka (semi)  → FireBazooka trigger
+//                Each weapon gets its own UpperBody fire state so timing, hold frames,
+//                and exit conditions can be tuned independently in the Animator.
+//
 //   • Reloading: H_Reload (trigger) + H_IsReloading (bool) via isReloadingNV.
 //   • Weapon   : H_WeaponType (int) via equippedWeaponIndex NV.
 //   • Speed    : Plain Lerp EMA — never overshoots blend-tree thresholds unlike SmoothDamp.
@@ -31,9 +38,13 @@
 //   Bool    IsCrouching     — drives Locomotion ↔ Crouch Movement transitions
 //   Bool    IsDead          — drives AnyState → Die and Die → Locomotion
 //   Bool    IsReloading     — keeps UpperBody in reload state across blend frames
+//   Bool    IsFiring        — true while Rifle auto-fire mouse is held
 //   Trigger Jump            — fires once per jump (jumpSequence change)
-//   Trigger Fire            — fires once per bullet (shootFireSequence change)
+//   Trigger FireShotgun     — fires once per shotgun shot (semi-auto)
+//   Trigger FireSniper      — fires once per sniper shot  (semi-auto)
+//   Trigger FireBazooka     — fires once per bazooka shot (semi-auto)
 //   Trigger Reload          — fires when reload starts (rising edge of IsReloading)
+//   Bool    IsScoped        — true while Sniper is in ADS (aim-down-sights)
 
 using UnityEngine;
 
@@ -64,17 +75,25 @@ public class ShooterAnimator : MonoBehaviour
     // ── Animator parameter hashes ─────────────────────────────────────────
     // Keep these in sync with the parameter names in your Animator Controller.
 
-    private static readonly int H_Speed       = Animator.StringToHash("Speed");
-    private static readonly int H_CrouchX     = Animator.StringToHash("CrouchMoveX");
-    private static readonly int H_CrouchY     = Animator.StringToHash("CrouchMoveY");
-    private static readonly int H_WeaponType  = Animator.StringToHash("WeaponType");
-    private static readonly int H_IsCrouching = Animator.StringToHash("IsCrouching");
-    private static readonly int H_IsDead      = Animator.StringToHash("IsDead");
-    private static readonly int H_IsReloading = Animator.StringToHash("IsReloading");
-    private static readonly int H_IsFiring    = Animator.StringToHash("IsFiring");
-    private static readonly int H_Jump        = Animator.StringToHash("Jump");
-    private static readonly int H_Fire        = Animator.StringToHash("Fire");
-    private static readonly int H_Reload      = Animator.StringToHash("Reload");
+    private static readonly int H_Speed        = Animator.StringToHash("Speed");
+    private static readonly int H_CrouchX      = Animator.StringToHash("CrouchMoveX");
+    private static readonly int H_CrouchY      = Animator.StringToHash("CrouchMoveY");
+    private static readonly int H_WeaponType   = Animator.StringToHash("WeaponType");
+    private static readonly int H_IsCrouching  = Animator.StringToHash("IsCrouching");
+    private static readonly int H_IsDead       = Animator.StringToHash("IsDead");
+    private static readonly int H_IsReloading  = Animator.StringToHash("IsReloading");
+    private static readonly int H_IsFiring     = Animator.StringToHash("IsFiring");
+    private static readonly int H_Jump         = Animator.StringToHash("Jump");
+    private static readonly int H_Reload       = Animator.StringToHash("Reload");
+
+    // Per-weapon fire triggers — one per semi-auto weapon.
+    // Rifle uses IsFiring (bool). Each other weapon gets its own trigger so
+    // the Animator can have a dedicated fire state per weapon with independent
+    // hold frames, exit time, and transition settings.
+    private static readonly int H_FireShotgun  = Animator.StringToHash("FireShotgun");
+    private static readonly int H_FireSniper   = Animator.StringToHash("FireSniper");
+    private static readonly int H_FireBazooka  = Animator.StringToHash("FireBazooka");
+    private static readonly int H_IsScoped     = Animator.StringToHash("IsScoped");
 
     // ── Runtime state ─────────────────────────────────────────────────────
 
@@ -241,8 +260,6 @@ public class ShooterAnimator : MonoBehaviour
 
         // ── 2. Dead — freeze all locomotion parameters ────────────────────
         // H_IsDead alone drives the AnyState → Die transition in the animator.
-        // Do NOT set triggers here; bool-based transitions are stable and cannot
-        // be consumed/dropped the way triggers can between rapid state changes.
         if (playerStats.IsDead())
         {
             _anim.SetBool(H_IsDead,      true);
@@ -269,20 +286,20 @@ public class ShooterAnimator : MonoBehaviour
             _anim.SetInteger(H_WeaponType, wi);
         }
 
-        // ── 4. Fire animation ─────────────────────────────────────────────────
-        // Automatic weapons (Rifle): use the IsFiring bool so the animator stays
-        // inside UB_Fire for the entire burst — no per-bullet trigger stutter.
-        // Semi-auto weapons: use the Fire trigger once per shot as before.
+        // ── 4. Fire animation ─────────────────────────────────────────────
+        // Weapon index mapping:  0=Rifle(auto)  1=Shotgun  2=Sniper  3=Bazooka
         //
-        // isAuto is determined by the equipped weapon index:
-        //   0 = Rifle (automatic)   1 = Shotgun   2 = Sniper   3 = Bazooka
-        // If you add more automatic weapons, expand the isAuto check below.
-        bool isAuto = playerStats.equippedWeaponIndex.Value == 0;
+        // Rifle  — IsFiring bool. True while the mouse is held, so the animator
+        //          stays inside UB_Fire for the full burst without per-bullet stutter.
+        //
+        // Shotgun / Sniper / Bazooka — dedicated per-weapon triggers.
+        //   Each trigger maps to its own UpperBody fire state in the Animator,
+        //   letting you tune hold frames, exit time, and blending per weapon
+        //   without the states sharing any transition conditions.
+        bool isAuto = playerStats.equippedWeaponIndex.Value == 0; // Rifle only
 
         if (isAuto)
         {
-            // Drive the UB_Fire state with a bool: enter on mouse-hold, exit on release.
-            // The UB_Fire animation clip should have Loop Time = ON.
             _anim.SetBool(H_IsFiring, playerStats.isAutoFiring.Value);
 
             // Keep _lastFireSequence in sync so we don't fire a stale trigger
@@ -291,23 +308,26 @@ public class ShooterAnimator : MonoBehaviour
         }
         else
         {
-            // Semi-auto: ensure the bool is cleared, then use trigger per shot.
+            // Semi-auto: ensure IsFiring bool is cleared, then fire the
+            // weapon-specific trigger on each shootFireSequence increment.
             _anim.SetBool(H_IsFiring, false);
 
             int fireSeq = playerStats.shootFireSequence.Value;
             if (fireSeq != _lastFireSequence)
             {
                 _lastFireSequence = fireSeq;
-                _anim.ResetTrigger(H_Fire);
-                _anim.SetTrigger(H_Fire);
+                FireByWeaponIndex(playerStats.equippedWeaponIndex.Value);
             }
         }
 
+        // ── 4b. Scope / ADS (Sniper only) ────────────────────────────────────
+        // isScopedNV is true only while the owner holds the Sniper scoped in.
+        // ShooterController clears it to false on every weapon switch, so this bool
+        // is always false on non-Sniper weapon states — the Animator Controller
+        // does not need an extra WeaponType guard on the transition conditions.
+        _anim.SetBool(H_IsScoped, playerStats.isScopedNV.Value);
+
         // ── 5. Reload animation ───────────────────────────────────────────
-        // isReloadingNV is written by ShooterController when the active weapon
-        // starts/ends reloading. We detect the rising edge to fire the Reload
-        // trigger (starts the reload clip on the UpperBody layer) and keep
-        // IsReloading bool in sync for blend-tree exit conditions.
         bool nowReloading = playerStats.isReloadingNV.Value;
         if (nowReloading != _wasReloading)
         {
@@ -321,12 +341,6 @@ public class ShooterAnimator : MonoBehaviour
         }
 
         // ── 6. Jump trigger ───────────────────────────────────────────────
-        // jumpSequence is an ever-increasing int (Owner-write NV). NGO always
-        // replicates int changes even at 30 Hz tick rate, unlike a one-frame
-        // bool which can be missed between ticks. We fire the Jump trigger once
-        // per real jump on all clients; the animator state machine transitions
-        // Locomotion → Jump Start → Jump Land → Locomotion automatically via
-        // exit-time transitions. No IsGrounded parameter needed.
         int currentSeq = playerStats.jumpSequence.Value;
         if (currentSeq != _lastJumpSequence)
         {
@@ -336,10 +350,6 @@ public class ShooterAnimator : MonoBehaviour
         }
 
         // ── 7. Crouch bool + 2D blend tree ───────────────────────────────
-        // The IsCrouching bool drives the Locomotion ↔ Crouch Movement transition
-        // (Has Exit Time must be OFF in the animator for instant response).
-        // CrouchMoveX/Y feeds the 2D Simple Directional blend tree inside
-        // Crouch Movement. We EMA-smooth the values to avoid jerky snapping.
         bool isCrouching = playerStats.isCrouching.Value;
         _anim.SetBool(H_IsCrouching, isCrouching);
 
@@ -349,7 +359,6 @@ public class ShooterAnimator : MonoBehaviour
 
             if (isOwner)
             {
-                // Owner: read raw input directly — no network latency.
                 float rawH = Input.GetAxis("Horizontal");
                 float rawV = Input.GetAxis("Vertical");
                 targetX = Mathf.Abs(rawH) > inputDeadZone ? rawH : 0f;
@@ -357,8 +366,6 @@ public class ShooterAnimator : MonoBehaviour
             }
             else
             {
-                // Non-owner: read localMoveDir NV (written by PlayerController
-                // from raw input). Never oscillates at NT update boundaries.
                 Vector2 dir = playerStats.localMoveDir.Value;
                 targetX = dir.x;
                 targetZ = dir.y;
@@ -372,7 +379,6 @@ public class ShooterAnimator : MonoBehaviour
         }
         else
         {
-            // Snap to zero immediately when standing — no need to ease out.
             _smoothedLocalX = 0f;
             _smoothedLocalZ = 0f;
             _anim.SetFloat(H_CrouchX, 0f);
@@ -380,17 +386,10 @@ public class ShooterAnimator : MonoBehaviour
         }
 
         // ── 8. Standing locomotion speed ──────────────────────────────────
-        // Speed feeds the 1D blend tree: 0 = Idle, 1 = Walk, 2 = Sprint.
-        // We compute a discrete targetSpeed (0/1/2) and smooth it with a plain
-        // Mathf.Lerp EMA. Unlike Animator.SetFloat's dampTime (which uses
-        // SmoothDamp internally), plain Lerp never overshoots, so the blend
-        // tree never briefly crosses a threshold and flickers.
         float targetSpeed;
 
         if (isCrouching)
         {
-            // Crouch Movement state handles its own blend tree; zero Speed here
-            // so if a transition back to Locomotion is blending it starts clean.
             targetSpeed = 0f;
         }
         else if (isOwner)
@@ -407,8 +406,6 @@ public class ShooterAnimator : MonoBehaviour
         }
         else
         {
-            // Non-owner: isMovingNV and isSprinting NV are written by PlayerController
-            // from direct input — they never oscillate at NT update boundaries.
             bool isMoving    = playerStats.isMovingNV.Value;
             bool isSprinting = playerStats.isSprinting.Value;
             targetSpeed = isMoving ? (isSprinting ? 2f : 1f) : 0f;
@@ -421,9 +418,42 @@ public class ShooterAnimator : MonoBehaviour
     // Required so the Animator does not apply root-motion displacement.
     private void OnAnimatorMove() { /* intentionally empty */ }
 
+    // ── Fire dispatch ─────────────────────────────────────────────────────
+    //
+    // Fires the trigger that matches the currently equipped semi-auto weapon.
+    // Each trigger corresponds to its own UpperBody fire state in the Animator,
+    // so clips, hold frames, and exit conditions are fully independent.
+    //
+    //   weaponIndex:  1 = Shotgun   2 = Sniper   3 = Bazooka
+    //
+    // ResetTrigger before SetTrigger is the NGO-safe pattern: it clears any
+    // un-consumed trigger from a previous frame before adding the new one,
+    // preventing double-triggers if two shots arrive in the same tick.
+    private void FireByWeaponIndex(int weaponIndex)
+    {
+        switch (weaponIndex)
+        {
+            case 1:
+                _anim.ResetTrigger(H_FireShotgun);
+                _anim.SetTrigger(H_FireShotgun);
+                break;
+            case 2:
+                _anim.ResetTrigger(H_FireSniper);
+                _anim.SetTrigger(H_FireSniper);
+                break;
+            case 3:
+                _anim.ResetTrigger(H_FireBazooka);
+                _anim.SetTrigger(H_FireBazooka);
+                break;
+            default:
+                // Index 0 (Rifle) is handled by the IsFiring bool path.
+                // Any unknown index is safely ignored.
+                break;
+        }
+    }
+
     // ── Death / Respawn ───────────────────────────────────────────────────
 
-    // Called by the isDead NV callback on ALL clients.
     private void OnDeadChanged(bool prev, bool next)
     {
         if (next && !_wasDead)
@@ -432,29 +462,28 @@ public class ShooterAnimator : MonoBehaviour
         }
         else if (!next && _wasDead)
         {
-            // Player has respawned. Clear the IsDead bool; the animator's
-            // Die → Locomotion transition (condition: IsDead = false) handles
-            // the blend back to normal. No trigger needed.
             _wasDead = false;
             _anim.SetBool(H_IsDead, false);
         }
     }
 
-    // Set IsDead = true. The AnyState → Die transition (condition: IsDead = true)
-    // in the animator fires automatically. No Die trigger — a bool is more robust
-    // because it cannot be consumed/dropped between state machine evaluations.
     private void ApplyDeathState()
     {
         _anim.SetBool(H_IsDead,      true);
         _anim.SetBool(H_IsReloading, false);
         _anim.SetBool(H_IsFiring,    false);
+        _anim.SetBool(H_IsScoped,    false);   // exit ADS pose on death
+
+        // Clear all pending fire triggers so death doesn't replay a shot.
+        _anim.ResetTrigger(H_FireShotgun);
+        _anim.ResetTrigger(H_FireSniper);
+        _anim.ResetTrigger(H_FireBazooka);
+
         _smoothedSpeed = 0f;
         _wasReloading  = false;
         _wasDead       = true;
     }
 
-    // Called by PlayerStats.onRespawn UnityEvent. Snapshots sequences so
-    // we don't fire stale jump/fire triggers on the first Update after respawn.
     private void OnRespawn()
     {
         if (playerStats != null)
@@ -467,11 +496,11 @@ public class ShooterAnimator : MonoBehaviour
 
         if (_anim != null)
         {
-            // Clear any un-consumed Jump trigger so a mid-air death doesn't
-            // replay the jump animation on respawn.
             _anim.ResetTrigger(H_Jump);
-            _anim.ResetTrigger(H_Fire);
             _anim.ResetTrigger(H_Reload);
+            _anim.ResetTrigger(H_FireShotgun);
+            _anim.ResetTrigger(H_FireSniper);
+            _anim.ResetTrigger(H_FireBazooka);
             _anim.SetBool(H_IsFiring, false);
         }
     }

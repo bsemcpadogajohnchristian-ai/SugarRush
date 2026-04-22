@@ -97,6 +97,17 @@ public class PlayerStats : NetworkBehaviour
     public NetworkVariable<bool> isAutoFiring = new(false,
         NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Owner);
 
+    // isScopedNV: true while the owner has the Sniper scoped in (ADS).
+    // Written by ShooterController.HandleScope() (owner-only) on every scope toggle,
+    // and explicitly cleared to false in ShooterController.EquipWeapon() so that
+    // switching away from the Sniper always exits the ADS pose on all clients.
+    // Read by ShooterAnimator on ALL clients to drive the IsScoped bool parameter,
+    // so remote players see the 3rd-person ADS pose while the owner is zoomed in.
+    // FPShooterAnimator reads shooterController.IsScoped() directly each frame
+    // instead of this NV since it only ever runs on the local owner.
+    public NetworkVariable<bool> isScopedNV = new(false,
+        NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Owner);
+
     // ── LOCOMOTION ANIMATION NVs ──────────────────────────────────────────────
     //
     // These replace per-frame position-delta velocity on non-owner clients.

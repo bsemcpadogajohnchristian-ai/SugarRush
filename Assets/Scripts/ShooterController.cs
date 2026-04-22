@@ -14,10 +14,7 @@ public class ShooterController : NetworkBehaviour
     public float  defaultFOV = 70f;
     public float  scopedFOV  = 30f;
 
-    
     public UnityEvent<int>  onWeaponEquipped = new();
-
-    
     public UnityEvent<bool> onScopeChanged   = new();
 
     private WeaponBase  _current;
@@ -34,18 +31,30 @@ public class ShooterController : NetworkBehaviour
 
     public override void OnNetworkSpawn()
     {
-        if (!IsOwner) { enabled = false; return; }
+        if (!IsOwner)
+        {
+            enabled = false;
+
+            ApplyWeaponVisibility(_stats.equippedWeaponIndex.Value);
+            _stats.equippedWeaponIndex.OnValueChanged += OnWeaponIndexChanged;
+            return;
+        }
+
         EquipWeapon(0);
-
         HUDManager.Instance?.SetInventoryVisible(false);
-
         if (HUDManager.Instance != null)
             HUDManager.Instance.RefreshShooterAmmo(this);
     }
 
     public override void OnNetworkDespawn()
     {
-        // Clean up weapon listeners.
+        if (!IsOwner)
+        {
+            if (_stats != null)
+                _stats.equippedWeaponIndex.OnValueChanged -= OnWeaponIndexChanged;
+            return;
+        }
+
         if (_current != null)
         {
             _current.onFired.RemoveListener(OnCurrentWeaponFired);
@@ -53,11 +62,21 @@ public class ShooterController : NetworkBehaviour
             _current.onReloadEnd.RemoveListener(OnCurrentWeaponReloadEnd);
         }
 
-        // Clear synced states so other clients don't see stale values.
-        if (_stats != null && IsOwner)
+        if (_stats != null)
         {
             _stats.isReloadingNV.Value = false;
             _stats.isAutoFiring.Value  = false;
+        }
+    }
+
+    private void OnWeaponIndexChanged(int prev, int next) => ApplyWeaponVisibility(next);
+
+    private void ApplyWeaponVisibility(int index)
+    {
+        for (int i = 0; i < availableWeapons.Count; i++)
+        {
+            if (availableWeapons[i] != null)
+                availableWeapons[i].gameObject.SetActive(i == index);
         }
     }
 
@@ -71,7 +90,21 @@ public class ShooterController : NetworkBehaviour
         HandleQuickSwap();
     }
 
-    
+    // ── FIX: Bug 1 — Rifle auto-fire animation persisting when ammo runs out ──────
+    //
+    // BEFORE: isAutoFiring was set to Input.GetMouseButton(0) alone.
+    //   When the magazine empties mid-burst, the mouse is still held,
+    //   so isAutoFiring stayed true → IsFiring bool stayed true →
+    //   ShooterAnimator and FPShooterAnimator kept the fire animation
+    //   playing even though no bullets were leaving the barrel.
+    //
+    // FIX: isAutoFiring is now only true when ALL THREE conditions hold:
+    //   1. Mouse button is held.
+    //   2. Current ammo > 0  (clip is not empty).
+    //   3. Weapon is not reloading.
+    //
+    // This guarantees the fire animation stops the instant the last round
+    // leaves the chamber and the reload begins, matching the visual exactly.
     private void HandleFire()
     {
         if (_inventoryOpen || _current == null) return;
@@ -81,13 +114,18 @@ public class ShooterController : NetworkBehaviour
             bool holding = Input.GetMouseButton(0);
             if (holding) _current.TryFire(playerCamera);
 
-            // Only dirty the NV when the state actually changes to minimise bandwidth.
-            if (_stats != null && _stats.isAutoFiring.Value != holding)
-                _stats.isAutoFiring.Value = holding;
+            // Only drive the fire animation while the weapon is genuinely
+            // shooting — has ammo AND is not mid-reload.
+            bool actuallyFiring = holding
+                                  && _current.GetCurrentAmmo() > 0
+                                  && !_current.IsReloading();
+
+            if (_stats != null && _stats.isAutoFiring.Value != actuallyFiring)
+                _stats.isAutoFiring.Value = actuallyFiring;
         }
         else
         {
-            // Switching to a semi-auto weapon — make sure the bool is cleared.
+            // Semi-auto: always clear the auto-fire bool.
             if (_stats != null && _stats.isAutoFiring.Value)
                 _stats.isAutoFiring.Value = false;
 
@@ -116,6 +154,8 @@ public class ShooterController : NetworkBehaviour
         {
             onScopeChanged?.Invoke(_isScoped);
             _prevScoped = _isScoped;
+
+            if (_stats != null) _stats.isScopedNV.Value = _isScoped;
         }
     }
 
@@ -144,13 +184,12 @@ public class ShooterController : NetworkBehaviour
 
     private void HandleQuickSwap()
     {
-        if (Input.GetKeyDown(KeyCode.Alpha1)) EquipWeapon(0);
+        if      (Input.GetKeyDown(KeyCode.Alpha1)) EquipWeapon(0);
         else if (Input.GetKeyDown(KeyCode.Alpha2)) EquipWeapon(1);
         else if (Input.GetKeyDown(KeyCode.Alpha3)) EquipWeapon(2);
         else if (Input.GetKeyDown(KeyCode.Alpha4)) EquipWeapon(3);
     }
 
-    
     public void SetInSwapZone(bool inside)
     {
         _inSwapZone = inside;
@@ -165,96 +204,77 @@ public class ShooterController : NetworkBehaviour
         Cursor.lockState = CursorLockMode.Locked;
     }
 
-    
     public void EquipWeapon(int index)
     {
         if (index < 0 || index >= availableWeapons.Count) return;
 
-        
         if (_current != null)
             _current.onFired.RemoveListener(OnCurrentWeaponFired);
 
-        
         _current?.CancelReload();
         _current?.RefillAmmo();
         _current?.gameObject.SetActive(false);
 
-        
         if (_current != null)
         {
             _current.onReloadStart.RemoveListener(OnCurrentWeaponReloadStart);
             _current.onReloadEnd.RemoveListener(OnCurrentWeaponReloadEnd);
         }
 
-        
         _currentIndex = index;
-        _current = availableWeapons[index];
+        _current      = availableWeapons[index];
         _current.gameObject.SetActive(true);
 
-        
         _current.onFired.AddListener(OnCurrentWeaponFired);
         _current.onReloadStart.AddListener(OnCurrentWeaponReloadStart);
         _current.onReloadEnd.AddListener(OnCurrentWeaponReloadEnd);
 
-        
         if (_stats != null)
         {
-            _stats.isReloadingNV.Value = false;
-            _stats.isAutoFiring.Value  = false;
-
-            // Sync the new weapon slot to all clients for 3rd-person animator.
+            _stats.isReloadingNV.Value       = false;
+            _stats.isAutoFiring.Value        = false;
+            _stats.isScopedNV.Value          = false;
             _stats.equippedWeaponIndex.Value = _currentIndex;
         }
 
         if (_isScoped) { _isScoped = false; _prevScoped = false; playerCamera.fieldOfView = defaultFOV; }
 
-        
         onWeaponEquipped?.Invoke(_currentIndex);
-
-        
         HUDManager.Instance?.NotifyWeaponChanged(index);
     }
 
-    
     private void OnCurrentWeaponFired()
     {
-        if (_stats != null)
-            _stats.shootFireSequence.Value++;
+        if (_stats != null) _stats.shootFireSequence.Value++;
     }
 
-    
     private void OnCurrentWeaponReloadStart()
     {
-        if (_stats != null)
-            _stats.isReloadingNV.Value = true;
+        if (_stats != null) _stats.isReloadingNV.Value = true;
     }
 
-    
     private void OnCurrentWeaponReloadEnd()
     {
-        if (_stats != null)
-            _stats.isReloadingNV.Value = false;
+        if (_stats != null) _stats.isReloadingNV.Value = false;
     }
 
-    
     [Rpc(SendTo.Server)]
     public void RegisterHitServerRpc(ulong targetId, float dmg)
     {
         if (!NetworkManager.SpawnManager.SpawnedObjects.TryGetValue(targetId, out var obj)) return;
-        TeamID myTeam = GetComponent<PlayerStats>()?.team.Value ?? _stats.team.Value;
+        TeamID myTeam = _stats.team.Value;
 
         PlayerStats ps = obj.GetComponent<PlayerStats>();
         if (ps != null && ps.team.Value != myTeam)
             ps.TakeDamage(dmg);
 
-        DecoyAI decoy = obj.GetComponent<DecoyAI>();
-        decoy?.TakeHitRpc(myTeam);
+        obj.GetComponent<DecoyAI>()?.TakeHitRpc(myTeam);
     }
 
     [Rpc(SendTo.Server)]
     public void RegisterShotgunHitsServerRpc(ulong[] ids, float[] damages)
     {
-        TeamID myTeam = GetComponent<PlayerStats>()?.team.Value ?? _stats.team.Value;
+        TeamID myTeam = _stats.team.Value;
         int count = Mathf.Min(ids.Length, damages.Length);
         for (int i = 0; i < count; i++)
         {
@@ -266,7 +286,6 @@ public class ShooterController : NetworkBehaviour
         }
     }
 
-    
     [Rpc(SendTo.NotOwner)]
     public void BroadcastMuzzleFlashRpc(int weaponIndex)
     {
@@ -292,7 +311,6 @@ public class ShooterController : NetworkBehaviour
         for (int i = 0; i < count; i++) w?.SpawnImpactFX(points[i], normals[i]);
     }
 
-    
     [Rpc(SendTo.Server)]
     public void SpawnRocketServerRpc(Vector3 pos, Quaternion rot,
         float speed, float splashRadius, float splashDmg, float directDmg)
