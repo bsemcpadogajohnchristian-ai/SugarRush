@@ -1,3 +1,48 @@
+// ShooterController.cs — Sugar Rush
+//
+// ── FP / 3P WEAPON ARCHITECTURE ─────────────────────────────────────────────
+//
+//  PROBLEM (double gun, no muzzle flash for observers):
+//    availableWeapons holds the FP weapon GameObjects (children of fpShooterArms).
+//    For non-owners, fpShooterArms is inactive → those GameObjects are inaccessible
+//    → BroadcastMuzzleFlashRpc called PlayMuzzleFlashLocal() on a disabled object
+//    → no muzzle flash and no fire audio were ever produced for spectating clients.
+//    The FP weapons were also not on the "Arms" layer, so the main camera rendered
+//    them alongside the 3P body weapon → two guns visible to the owner.
+//
+//  FIX — two-weapon-set pattern (standard in production FPS games):
+//
+//    FP set  (availableWeapons):  WeaponBase scripts + FP meshes + FP audio.
+//      • Lives under fpShooterArms (child of CameraHolder).
+//      • PlayerSetup.SetLayerRecursively stamps the entire hierarchy with the
+//        "Arms" layer → ArmsCamera (Overlay, Culling Mask = Arms only) is the
+//        sole renderer; main camera excludes Arms → owner never sees FP arms
+//        through the main camera.
+//      • Only the owner activates fpShooterArms. All game logic (firing, reload,
+//        ammo) runs here. FP muzzle flash plays via PlayMuzzleFlashLocal().
+//
+//    3P set  (thirdPersonWeapons):  Pure-visual GameObjects on the body rig.
+//      • Parented to the hand bone on Body_Shooter (or as children of it).
+//      • Switched by ApplyWeaponVisibility() on ALL clients via equippedWeaponIndex.
+//      • On the owner: bodyShooter renderers are disabled (PlayerSetup), so the
+//        3P weapon is invisible to the owner — only the FP set is seen.
+//      • On non-owners: fpShooterArms is inactive; bodyShooter is visible; the
+//        active 3P weapon is the one observers see.
+//
+//    Effects:
+//      Owner     — FP muzzle flash on FP weapon muzzle, seen via ArmsCamera.
+//                  Impact FX spawned at world position → visible to all cameras.
+//      Non-owner — BroadcastMuzzleFlashRpc uses thirdPersonMuzzles[i] to spawn
+//                  3P muzzle flash at the correct world position on the body rig.
+//                  Audio played via sharedWeaponAudio (always-active AudioSource
+//                  on the player root, never under a disabled parent).
+//
+//  INSPECTOR SETUP (per slot, must match availableWeapons order):
+//    thirdPersonWeapons[i]  — the 3P weapon mesh GameObject on Body_Shooter's hand bone
+//    thirdPersonMuzzles[i]  — Transform at the 3P weapon's barrel tip
+//    thirdPersonMuzzleFX[i] — muzzle flash prefab (can reuse the same as FP or make a smaller one)
+//    sharedWeaponAudio      — AudioSource on the Player root (always active)
+
 using System.Collections;
 using System.Collections.Generic;
 using Unity.Netcode;
@@ -6,8 +51,31 @@ using UnityEngine.Events;
 
 public class ShooterController : NetworkBehaviour
 {
-    [Header("Weapons")]
+    [Header("Weapons — FP set (WeaponBase scripts, children of fpShooterArms)")]
     public List<WeaponBase> availableWeapons = new();
+
+    // ── 3P weapon visuals ────────────────────────────────────────────────────
+    [Header("Weapons — 3P set (pure-visual meshes on Body_Shooter hand bone)")]
+    [Tooltip("One entry per availableWeapons slot, same order.\n" +
+             "Each GameObject is the 3P mesh that represents that weapon on the body rig.\n" +
+             "ApplyWeaponVisibility enables the active one and disables the rest on ALL clients.")]
+    public List<GameObject> thirdPersonWeapons = new();
+
+    [Tooltip("One entry per availableWeapons slot, same order.\n" +
+             "The Transform at the barrel tip of each 3P weapon mesh.\n" +
+             "BroadcastMuzzleFlashRpc spawns the muzzle-flash FX here for non-owners.")]
+    public List<Transform>  thirdPersonMuzzles = new();
+
+    [Tooltip("One entry per availableWeapons slot, same order.\n" +
+             "The muzzle-flash VFX prefab for each 3P weapon.\n" +
+             "Can be the same prefab as the FP weapon's muzzleFlashFX or a smaller version.")]
+    public List<GameObject> thirdPersonMuzzleFX = new();
+
+    [Header("Audio")]
+    [Tooltip("AudioSource on the Player root (NOT under fpShooterArms).\n" +
+             "Must be always-active so non-owner clients hear fire and reload sounds\n" +
+             "even though fpShooterArms is disabled on their end.")]
+    public AudioSource sharedWeaponAudio;
 
     [Header("Camera")]
     public Camera playerCamera;
@@ -35,6 +103,7 @@ public class ShooterController : NetworkBehaviour
         {
             enabled = false;
 
+            // Drive both FP and 3P weapon visibility from the NV on non-owners.
             ApplyWeaponVisibility(_stats.equippedWeaponIndex.Value);
             _stats.equippedWeaponIndex.OnValueChanged += OnWeaponIndexChanged;
             return;
@@ -71,12 +140,30 @@ public class ShooterController : NetworkBehaviour
 
     private void OnWeaponIndexChanged(int prev, int next) => ApplyWeaponVisibility(next);
 
+    // ── ApplyWeaponVisibility ────────────────────────────────────────────────
+    //
+    // Switches both the FP set (availableWeapons) and the 3P set (thirdPersonWeapons)
+    // so the correct mesh is shown in each context:
+    //
+    //   Owner         FP weapon[i] active  |  3P weapon[i] active (body hidden anyway)
+    //   Non-owner     FP weapons N/A        |  3P weapon[i] active (body visible)
+    //
+    // Called on owner from EquipWeapon(), on non-owners from the NV callback.
     private void ApplyWeaponVisibility(int index)
     {
+        // FP weapons — only meaningful when fpShooterArms is active (owner side).
         for (int i = 0; i < availableWeapons.Count; i++)
         {
             if (availableWeapons[i] != null)
                 availableWeapons[i].gameObject.SetActive(i == index);
+        }
+
+        // 3P weapons — meaningful for ALL clients (non-owner sees body; owner has
+        // body hidden but no harm done setting this for correctness).
+        for (int i = 0; i < thirdPersonWeapons.Count; i++)
+        {
+            if (thirdPersonWeapons[i] != null)
+                thirdPersonWeapons[i].SetActive(i == index);
         }
     }
 
@@ -90,21 +177,7 @@ public class ShooterController : NetworkBehaviour
         HandleQuickSwap();
     }
 
-    // ── FIX: Bug 1 — Rifle auto-fire animation persisting when ammo runs out ──────
-    //
-    // BEFORE: isAutoFiring was set to Input.GetMouseButton(0) alone.
-    //   When the magazine empties mid-burst, the mouse is still held,
-    //   so isAutoFiring stayed true → IsFiring bool stayed true →
-    //   ShooterAnimator and FPShooterAnimator kept the fire animation
-    //   playing even though no bullets were leaving the barrel.
-    //
-    // FIX: isAutoFiring is now only true when ALL THREE conditions hold:
-    //   1. Mouse button is held.
-    //   2. Current ammo > 0  (clip is not empty).
-    //   3. Weapon is not reloading.
-    //
-    // This guarantees the fire animation stops the instant the last round
-    // leaves the chamber and the reload begins, matching the visual exactly.
+    // ── FIX: Rifle auto-fire animation stops when ammo runs out ─────────────
     private void HandleFire()
     {
         if (_inventoryOpen || _current == null) return;
@@ -114,8 +187,6 @@ public class ShooterController : NetworkBehaviour
             bool holding = Input.GetMouseButton(0);
             if (holding) _current.TryFire(playerCamera);
 
-            // Only drive the fire animation while the weapon is genuinely
-            // shooting — has ammo AND is not mid-reload.
             bool actuallyFiring = holding
                                   && _current.GetCurrentAmmo() > 0
                                   && !_current.IsReloading();
@@ -125,7 +196,6 @@ public class ShooterController : NetworkBehaviour
         }
         else
         {
-            // Semi-auto: always clear the auto-fire bool.
             if (_stats != null && _stats.isAutoFiring.Value)
                 _stats.isAutoFiring.Value = false;
 
@@ -154,7 +224,6 @@ public class ShooterController : NetworkBehaviour
         {
             onScopeChanged?.Invoke(_isScoped);
             _prevScoped = _isScoped;
-
             if (_stats != null) _stats.isScopedNV.Value = _isScoped;
         }
     }
@@ -209,21 +278,20 @@ public class ShooterController : NetworkBehaviour
         if (index < 0 || index >= availableWeapons.Count) return;
 
         if (_current != null)
-            _current.onFired.RemoveListener(OnCurrentWeaponFired);
-
-        _current?.CancelReload();
-        _current?.RefillAmmo();
-        _current?.gameObject.SetActive(false);
-
-        if (_current != null)
         {
+            _current.onFired.RemoveListener(OnCurrentWeaponFired);
             _current.onReloadStart.RemoveListener(OnCurrentWeaponReloadStart);
             _current.onReloadEnd.RemoveListener(OnCurrentWeaponReloadEnd);
         }
 
+        _current?.CancelReload();
+        _current?.RefillAmmo();
+
         _currentIndex = index;
         _current      = availableWeapons[index];
-        _current.gameObject.SetActive(true);
+
+        // ApplyWeaponVisibility handles both FP and 3P weapon sets.
+        ApplyWeaponVisibility(_currentIndex);
 
         _current.onFired.AddListener(OnCurrentWeaponFired);
         _current.onReloadStart.AddListener(OnCurrentWeaponReloadStart);
@@ -286,13 +354,54 @@ public class ShooterController : NetworkBehaviour
         }
     }
 
+    // ── BroadcastMuzzleFlashRpc ──────────────────────────────────────────────
+    //
+    // FIX: Previously called availableWeapons[i].PlayMuzzleFlashLocal() on
+    // non-owners. Those weapons are children of disabled fpShooterArms →
+    // inactive → PlayMuzzleFlashLocal is a no-op → observers saw nothing.
+    //
+    // NEW BEHAVIOUR for non-owners:
+    //   • Spawn 3P muzzle flash at thirdPersonMuzzles[weaponIndex] using FXPool.
+    //   • Play fire audio via sharedWeaponAudio (always-active AudioSource on
+    //     the player root — never under a disabled parent GameObject).
+    //
+    // Owner receives this RPC on the FP side (TryFire → PlayMuzzleFlashLocal)
+    // and never enters this path because SendTo.NotOwner excludes them.
     [Rpc(SendTo.NotOwner)]
     public void BroadcastMuzzleFlashRpc(int weaponIndex)
     {
-        if (weaponIndex < 0 || weaponIndex >= availableWeapons.Count) return;
-        WeaponBase w = availableWeapons[weaponIndex];
-        w?.PlayMuzzleFlashLocal();
-        if (w?.fireSound != null) w.audioSource?.PlayOneShot(w.fireSound);
+        // ── 3P muzzle flash ─────────────────────────────────────────────────
+        if (weaponIndex >= 0 && weaponIndex < thirdPersonMuzzles.Count)
+        {
+            Transform   muzzle3P = thirdPersonMuzzles[weaponIndex];
+            GameObject  fx3P     = weaponIndex < thirdPersonMuzzleFX.Count
+                                   ? thirdPersonMuzzleFX[weaponIndex] : null;
+
+            if (muzzle3P != null && fx3P != null)
+            {
+                if (FXPool.Instance != null)
+                    FXPool.Instance.Spawn(fx3P, muzzle3P.position, muzzle3P.rotation);
+                else
+                {
+                    GameObject go = Instantiate(fx3P, muzzle3P.position, muzzle3P.rotation);
+                    Destroy(go, 2f);
+                }
+            }
+        }
+
+        // ── Fire audio via shared (always-active) AudioSource ───────────────
+        if (weaponIndex >= 0 && weaponIndex < availableWeapons.Count)
+        {
+            WeaponBase w = availableWeapons[weaponIndex];
+            if (w?.fireSound != null)
+            {
+                // Prefer sharedWeaponAudio (on the player root, always active).
+                // Fall back to the FP weapon's own AudioSource only if the root
+                // source wasn't assigned in the Inspector.
+                AudioSource src = sharedWeaponAudio != null ? sharedWeaponAudio : w.audioSource;
+                src?.PlayOneShot(w.fireSound);
+            }
+        }
     }
 
     [Rpc(SendTo.NotOwner)]
