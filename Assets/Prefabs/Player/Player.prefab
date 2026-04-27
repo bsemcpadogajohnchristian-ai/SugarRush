@@ -1322,6 +1322,7 @@ GameObject:
   - component: {fileID: 2190729536121249273}
   - component: {fileID: 2806649141525555387}
   - component: {fileID: 562734815356776448}
+  - component: {fileID: 3154011960060335369}
   m_Layer: 6
   m_Name: Player
   m_TagString: Untagged
@@ -1360,7 +1361,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d5a57f767e5e46a458fc5d3c628d0cbb, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Unity.Netcode.Runtime::Unity.Netcode.NetworkObject
-  GlobalObjectIdHash: 910673170
+  GlobalObjectIdHash: 482223788
   InScenePlacedSourceGlobalObjectIdHash: 910673170
   DeferredDespawnTick: 0
   Ownership: 1
@@ -1642,6 +1643,21 @@ MonoBehaviour:
     m_InternalValue: 0
   superSpeedActive:
     m_InternalValue: 0
+--- !u!114 &3154011960060335369
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7233601877118886740}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 13915d460db728b4da558b3fa963dabc, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::EnemyOutlineController
+  ShowTopMostFoldoutHeaderGroup: 1
+  outlineMaterial: {fileID: 2100000, guid: 83583b8df7bfc2946abba6edde6aedb0, type: 2}
+  outlineMaterialTeamB: {fileID: 0}
 --- !u!1 &7444629573280749308
 GameObject:
   m_ObjectHideFlags: 0

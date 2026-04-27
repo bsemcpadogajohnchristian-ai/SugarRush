@@ -327,21 +327,26 @@ public class ShooterController : NetworkBehaviour
     }
 
     [Rpc(SendTo.Server)]
-    public void RegisterHitServerRpc(ulong targetId, float dmg)
+    public void RegisterHitServerRpc(ulong targetId, float dmg, string weaponName,
+        RpcParams rpcParams = default)
     {
+        ulong senderClientId = rpcParams.Receive.SenderClientId;
+
         if (!NetworkManager.SpawnManager.SpawnedObjects.TryGetValue(targetId, out var obj)) return;
         TeamID myTeam = _stats.team.Value;
 
         PlayerStats ps = obj.GetComponent<PlayerStats>();
         if (ps != null && ps.team.Value != myTeam)
-            ps.TakeDamage(dmg);
+            ps.TakeDamageFrom(dmg, senderClientId, weaponName);
 
         obj.GetComponent<DecoyAI>()?.TakeHitRpc(myTeam);
     }
 
     [Rpc(SendTo.Server)]
-    public void RegisterShotgunHitsServerRpc(ulong[] ids, float[] damages)
+    public void RegisterShotgunHitsServerRpc(ulong[] ids, float[] damages, string weaponName,
+        RpcParams rpcParams = default)
     {
+        ulong senderClientId = rpcParams.Receive.SenderClientId;
         TeamID myTeam = _stats.team.Value;
         int count = Mathf.Min(ids.Length, damages.Length);
         for (int i = 0; i < count; i++)
@@ -349,7 +354,7 @@ public class ShooterController : NetworkBehaviour
             if (!NetworkManager.SpawnManager.SpawnedObjects.TryGetValue(ids[i], out var obj)) continue;
             PlayerStats ps = obj.GetComponent<PlayerStats>();
             if (ps != null && ps.team.Value != myTeam)
-                ps.TakeDamage(damages[i]);
+                ps.TakeDamageFrom(damages[i], senderClientId, weaponName);
             obj.GetComponent<DecoyAI>()?.TakeHitRpc(myTeam);
         }
     }
@@ -431,7 +436,8 @@ public class ShooterController : NetworkBehaviour
         GameObject obj = Instantiate(baz.rocketPrefab, pos, rot);
         obj.GetComponent<NetworkObject>()?.Spawn(true);
         obj.GetComponent<Rocket>()?.Initialize(speed, splashRadius, splashDmg, directDmg,
-            baz.explosionMask, baz.bulletImpactFX, _stats.team.Value);
+            baz.explosionMask, baz.bulletImpactFX, _stats.team.Value,
+            OwnerClientId); // ← kill feed: lets Rocket.Explode attribute the kill
     }
 
     public WeaponBase GetCurrentWeapon() => _current;

@@ -1,3 +1,10 @@
+// ShotgunWeapon.cs — Sugar Rush
+//
+// ── KILL FEED CHANGE ─────────────────────────────────────────────────────────
+//   RegisterShotgunHitsServerRpc now receives weaponName as well.
+//   Pass it through from the Fire() call below.
+//   All other logic is identical to the original.
+
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
@@ -12,7 +19,6 @@ public class ShotgunWeapon : WeaponBase
 
     private bool _cancelReload;
 
-    
     private readonly List<ulong>   _hitIds     = new();
     private readonly List<float>   _hitDamages = new();
     private readonly List<Vector3> _hitPoints  = new();
@@ -30,16 +36,14 @@ public class ShotgunWeapon : WeaponBase
         maxAmmo      = 24;
         reloadTime   = 0.6f;
 
-        
         _currentAmmo = magazineSize;
         _totalAmmo   = maxAmmo;
     }
 
-    
     public override void CancelReload()
     {
-        _cancelReload = false;   
-        base.CancelReload();     
+        _cancelReload = false;
+        base.CancelReload();
     }
 
     public override void TryFire(Camera cam)
@@ -63,7 +67,6 @@ public class ShotgunWeapon : WeaponBase
 
             if (!Physics.Raycast(cam.transform.position, dir, out RaycastHit hit, range)) continue;
 
-            
             SpawnImpactFX(hit.point, hit.normal);
             _hitPoints.Add(hit.point);
             _hitNormals.Add(hit.normal);
@@ -77,8 +80,9 @@ public class ShotgunWeapon : WeaponBase
             }
         }
 
+        // ── KILL FEED CHANGE: pass weaponName so server can attribute the kill ──
         if (_hitIds.Count > 0)
-            _shooter?.RegisterShotgunHitsServerRpc(_hitIds.ToArray(), _hitDamages.ToArray());
+            _shooter?.RegisterShotgunHitsServerRpc(_hitIds.ToArray(), _hitDamages.ToArray(), weaponName);
 
         if (_hitPoints.Count > 0)
             _shooter?.BroadcastShotgunImpactsRpc(_shooter.CurrentWeaponIndex,
@@ -91,7 +95,6 @@ public class ShotgunWeapon : WeaponBase
         _cancelReload = false;
         onReloadStart?.Invoke();
 
-        
         while (_currentAmmo < magazineSize)
         {
             if (_cancelReload) break;
@@ -105,7 +108,7 @@ public class ShotgunWeapon : WeaponBase
 
         _cancelReload    = false;
         _isReloading     = false;
-        _reloadCoroutine = null; 
+        _reloadCoroutine = null;
         onReloadEnd?.Invoke();
     }
 }

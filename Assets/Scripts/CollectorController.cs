@@ -19,13 +19,16 @@ public class CollectorController : NetworkBehaviour
 
     [Header("Decoy")]
     public GameObject decoyPrefab;
-    public float      decoyCooldown = 20f;
+    public float      decoyCooldown       = 20f;
+    public float      decoyWindowDuration = 5f;  // seconds to use 2nd charge before cooldown auto-starts
+    public int        decoyMaxCharges     = 2;
 
     [Header("HUD events")]
     public UnityEvent<int>   onCandyCountChanged  = new();
     public UnityEvent<float> onSuperSpeedCooldown = new();
     public UnityEvent<float> onDecoyCooldown      = new();
-    
+    public UnityEvent<int>   onDecoyChargesChanged = new();  // fires with current charge count (0-2)
+    public UnityEvent<float> onDecoyWindow         = new();  // fires with remaining window time (0-5s)
     
     public UnityEvent        onDecoyFired         = new();
 
@@ -39,7 +42,10 @@ public class CollectorController : NetworkBehaviour
     private PlayerStats      _stats;
 
     private float _superSpeedTimer;
-    private float _decoyTimer;
+    private float _decoyTimer;       // cooldown countdown — charges restore when this hits 0
+    private float _decoyWindowTimer; // 5s use-window countdown after first charge is spent
+    private bool  _inDecoyWindow;    // true while window is open
+    private int   _decoyCharges;     // current available charges (0-decoyMaxCharges)
     private bool  _superSpeedActive;
     private float _currentPenalty = 1f;
 
@@ -56,6 +62,9 @@ public class CollectorController : NetworkBehaviour
         carriedCount.OnValueChanged += OnCarriedCountChanged;
         if (IsServer) _stats.onDeath.AddListener(OnDied);
         if (!IsOwner) { enabled = false; return; }
+
+        // Start with full charges
+        _decoyCharges = decoyMaxCharges;
     }
 
     public override void OnNetworkDespawn()
@@ -177,12 +186,31 @@ public class CollectorController : NetworkBehaviour
     
     private void HandleDecoy()
     {
-        if (Input.GetKeyDown(KeyCode.Q) && _decoyTimer <= 0f)
+        // Q pressed, have a charge, and cooldown is not running
+        if (Input.GetKeyDown(KeyCode.Q) && _decoyCharges > 0 && _decoyTimer <= 0f)
         {
             SpawnDecoyRpc(transform.position, transform.forward,
                 _stats.speedMultiplier * _pc.sprintSpeed);
-            _decoyTimer = decoyCooldown;
-            onDecoyFired?.Invoke();   
+
+            _decoyCharges--;
+            onDecoyFired?.Invoke();
+            onDecoyChargesChanged?.Invoke(_decoyCharges);
+
+            if (_decoyCharges > 0)
+            {
+                // First charge spent — open the 5-second use window for the second charge
+                _inDecoyWindow    = true;
+                _decoyWindowTimer = decoyWindowDuration;
+                onDecoyWindow?.Invoke(_decoyWindowTimer);
+            }
+            else
+            {
+                // Both charges spent (used 2nd in window) — close window, start cooldown
+                _inDecoyWindow    = false;
+                _decoyWindowTimer = 0f;
+                _decoyTimer       = decoyCooldown;
+                onDecoyWindow?.Invoke(0f);
+            }
         }
     }
 
@@ -200,6 +228,11 @@ public class CollectorController : NetworkBehaviour
         if (decoyAI != null) decoyAI.ownerTeam = _stats.team.Value;
 
         obj.GetComponent<NetworkObject>()?.Spawn(true);
+
+        // Set synced team AFTER Spawn() so the NetworkVariable is live
+        if (decoyAI != null)
+            decoyAI.syncedTeam.Value = _stats.team.Value;
+
         decoyAI?.InitializeMovement(dir, speed);
     }
 
@@ -236,10 +269,37 @@ public class CollectorController : NetworkBehaviour
             _superSpeedTimer -= Time.deltaTime;
             onSuperSpeedCooldown?.Invoke(Mathf.Max(_superSpeedTimer, 0f));
         }
+
+        // ── Decoy use-window countdown ────────────────────────────────────
+        if (_inDecoyWindow)
+        {
+            _decoyWindowTimer -= Time.deltaTime;
+            onDecoyWindow?.Invoke(Mathf.Max(_decoyWindowTimer, 0f));
+
+            if (_decoyWindowTimer <= 0f)
+            {
+                // Window expired without using 2nd charge — start cooldown now
+                _inDecoyWindow    = false;
+                _decoyWindowTimer = 0f;
+                _decoyTimer       = decoyCooldown;
+                onDecoyWindow?.Invoke(0f);
+            }
+        }
+
+        // ── Decoy cooldown countdown ──────────────────────────────────────
         if (_decoyTimer > 0f)
         {
             _decoyTimer -= Time.deltaTime;
             onDecoyCooldown?.Invoke(Mathf.Max(_decoyTimer, 0f));
+
+            if (_decoyTimer <= 0f)
+            {
+                // Cooldown finished — restore all charges
+                _decoyTimer   = 0f;
+                _decoyCharges = decoyMaxCharges;
+                onDecoyCooldown?.Invoke(0f);
+                onDecoyChargesChanged?.Invoke(_decoyCharges);
+            }
         }
     }
 
