@@ -1,3 +1,21 @@
+// HUDManager.cs — Sugar Rush (UPDATED: Smoke Grenade HUD)
+//
+// ── WHAT CHANGED ──────────────────────────────────────────────────────────
+//   New Inspector fields (Collector section):
+//     smokeGrenadePanel   — root GameObject containing smoke UI elements
+//     smokeGrenadeFill    — Image (Filled type) for cooldown ring / bar
+//     smokeGrenadeTimerText — TMP label showing remaining seconds or "Ready!"
+//     smokeChargesText    — TMP label showing "x2" / "x1" / "x0"
+//     smokeOverlayPanel   — full-screen Image shown when the player is inside smoke
+//
+//   ResetAndInitialize() wires CollectorController's new smoke events.
+//   Cleanup() properly unsubscribes them.
+//   New methods:
+//     UpdateSmokeCooldown(float)  — drives smokeGrenadeFill + smokeGrenadeTimerText
+//     UpdateSmokeCharges(int)     — drives smokeChargesText
+//     SetSmokeOverlay(bool)       — shows/hides the screen-space smoke overlay
+//                                   called by SmokeCloud via targeted RPC
+
 using System.Collections;
 using UnityEngine;
 using UnityEngine.UI;
@@ -32,24 +50,47 @@ public class HUDManager : MonoBehaviour
     public TextMeshProUGUI superSpeedTimerText;
     public TextMeshProUGUI decoyTimerText;
 
+    // ── NEW: Smoke Grenade UI ─────────────────────────────────────────────────
+    [Header("Smoke Grenade (Collector)")]
+    [Tooltip("Root GameObject that groups the smoke grenade HUD elements. " +
+             "Enable/disable this alongside abilityPanel.")]
+    public GameObject      smokeGrenadePanel;
+
+    [Tooltip("Image component with Image Type = Filled. Fill Amount drives the cooldown.")]
+    public Image           smokeGrenadeFill;
+
+    [Tooltip("TMP label showing remaining cooldown seconds, or 'Ready!' when available.")]
+    public TextMeshProUGUI smokeGrenadeTimerText;
+
+    [Tooltip("TMP label showing current charge count, e.g. 'x2'.")]
+    public TextMeshProUGUI smokeChargesText;
+
+    [Header("Smoke Screen Overlay")]
+    [Tooltip("Full-screen Image (or CanvasGroup) shown when the local player is " +
+             "standing inside a smoke cloud. Set its alpha to about 0.55 in the " +
+             "Inspector so it tints the screen without fully obscuring vision. " +
+             "The Image color should be a dark grey/green smoke tint.")]
+    public GameObject smokeOverlayPanel;
+    // ─────────────────────────────────────────────────────────────────────────
+
     [Header("Notifications")]
     public TextMeshProUGUI notificationText;
 
     [Header("Weapon Swap Zone")]
-    [Tooltip("Drag the SwapZonePrompt Text object from HUDCanvas here.")]
     public GameObject swapZonePrompt;
 
     [Header("Inventory")]
-    [Tooltip("Drag the InventoryPanel root GameObject from HUDCanvas here.")]
-    public GameObject  inventoryPanel;   
-    public InventoryUI inventoryUI;      
+    public GameObject  inventoryPanel;
+    public InventoryUI inventoryUI;
 
-    
+    // ── Private runtime ───────────────────────────────────────────────────────
+
     private PlayerStats         _player;
     private WeaponBase          _trackedWeapon;
     private CollectorController _trackedCollector;
     private float               _superSpeedMax = 30f;
     private float               _decoyMax      = 20f;
+    private float               _smokeMax      = 25f;   // ← NEW: matches smokeGrenadeCooldown
 
     private void Awake()
     {
@@ -61,14 +102,16 @@ public class HUDManager : MonoBehaviour
     {
         if (notificationText) notificationText.text = "";
         reloadText?.gameObject.SetActive(false);
-
-        
         SetInventoryVisible(false);
+
+        // Smoke overlay starts hidden.
+        if (smokeOverlayPanel != null) smokeOverlayPanel.SetActive(false);  // ← NEW
     }
 
     private void OnDestroy() { if (Instance == this) Instance = null; }
 
-    
+    // ── Initialize ────────────────────────────────────────────────────────────
+
     public void ResetAndInitialize(PlayerStats ps)
     {
         Cleanup();
@@ -83,6 +126,7 @@ public class HUDManager : MonoBehaviour
         ammoPanel?.SetActive(isShooter);
         candyPanel?.SetActive(!isShooter);
         abilityPanel?.SetActive(!isShooter);
+        smokeGrenadePanel?.SetActive(!isShooter);   // ← NEW
 
         if (isShooter)
         {
@@ -100,21 +144,33 @@ public class HUDManager : MonoBehaviour
                 _trackedCollector = cc;
                 _superSpeedMax    = cc.superSpeedCooldown;
                 _decoyMax         = cc.decoyCooldown;
+                _smokeMax         = cc.smokeGrenadeCooldown;   // ← NEW
+
                 cc.onCandyCountChanged.AddListener(UpdateCandyCount);
                 cc.onSuperSpeedCooldown.AddListener(UpdateSuperSpeedCD);
                 cc.onDecoyCooldown.AddListener(UpdateDecoyCD);
+
+                // ── NEW: wire smoke events ────────────────────────────────────
+                cc.onSmokeGrenadeCooldown.AddListener(UpdateSmokeCooldown);
+                cc.onSmokeChargesChanged.AddListener(UpdateSmokeCharges);
+                // ─────────────────────────────────────────────────────────────
+
                 UpdateCandyCount(0);
+                UpdateSmokeCooldown(0f);                       // ← NEW (show "Ready!")
+                UpdateSmokeCharges(cc.smokeMaxCharges);        // ← NEW (show full charges)
             }
         }
     }
 
-    
+    // ── Inventory ─────────────────────────────────────────────────────────────
+
     public void SetInventoryVisible(bool show)
     {
         if (inventoryPanel != null) inventoryPanel.SetActive(show);
     }
 
-    
+    // ── GameManager wiring ────────────────────────────────────────────────────
+
     private void WireGameManager()
     {
         NetworkGameManager ngm = NetworkGameManager.Instance;
@@ -186,7 +242,8 @@ public class HUDManager : MonoBehaviour
 
     public void ResetInitialization() => Cleanup();
 
-    
+    // ── Weapon wiring ─────────────────────────────────────────────────────────
+
     private void WireWeapon(WeaponBase w)
     {
         _trackedWeapon = w;
@@ -213,7 +270,10 @@ public class HUDManager : MonoBehaviour
         ammoPanel?.SetActive(true);
         candyPanel?.SetActive(false);
         abilityPanel?.SetActive(false);
+        smokeGrenadePanel?.SetActive(false);   // ← NEW
     }
+
+    // ── Cleanup ───────────────────────────────────────────────────────────────
 
     private void Cleanup()
     {
@@ -236,6 +296,12 @@ public class HUDManager : MonoBehaviour
             _trackedCollector.onCandyCountChanged.RemoveListener(UpdateCandyCount);
             _trackedCollector.onSuperSpeedCooldown.RemoveListener(UpdateSuperSpeedCD);
             _trackedCollector.onDecoyCooldown.RemoveListener(UpdateDecoyCD);
+
+            // ── NEW: unsubscribe smoke events ─────────────────────────────────
+            _trackedCollector.onSmokeGrenadeCooldown.RemoveListener(UpdateSmokeCooldown);
+            _trackedCollector.onSmokeChargesChanged.RemoveListener(UpdateSmokeCharges);
+            // ─────────────────────────────────────────────────────────────────
+
             _trackedCollector = null;
         }
 
@@ -252,7 +318,8 @@ public class HUDManager : MonoBehaviour
         }
     }
 
-    
+    // ── Score / Timer updates ─────────────────────────────────────────────────
+
     private void UpdateScore(int a, int b)
     {
         if (teamAScoreText) teamAScoreText.text = $"Team A: {a}";
@@ -297,17 +364,52 @@ public class HUDManager : MonoBehaviour
         if (decoyTimerText) decoyTimerText.text  = r > 0f ? $"{r:F1}s" : "Ready!";
     }
 
+    // ── NEW: Smoke grenade UI updates ─────────────────────────────────────────
+
+    /// <summary>Called by CollectorController.onSmokeGrenadeCooldown.</summary>
+    private void UpdateSmokeCooldown(float remaining)
+    {
+        if (smokeGrenadeFill)
+            smokeGrenadeFill.fillAmount = _smokeMax > 0f ? remaining / _smokeMax : 0f;
+
+        if (smokeGrenadeTimerText)
+            smokeGrenadeTimerText.text = remaining > 0f ? $"{remaining:F1}s" : "Ready!";
+    }
+
+    /// <summary>Called by CollectorController.onSmokeChargesChanged.</summary>
+    private void UpdateSmokeCharges(int charges)
+    {
+        if (smokeChargesText)
+            smokeChargesText.text = $"x{charges}";
+    }
+
+    /// <summary>
+    /// Called by SmokeCloud (via targeted RPC) when the local player enters or
+    /// exits a smoke cloud. Activates the full-screen smoke overlay panel.
+    /// </summary>
+    public void SetSmokeOverlay(bool isInside)
+    {
+        if (smokeOverlayPanel != null)
+            smokeOverlayPanel.SetActive(isInside);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // ── Reload text ───────────────────────────────────────────────────────────
+
     private void ShowReloadText()
     {
-        if (ammoText)   ammoText.gameObject.SetActive(false); 
+        if (ammoText)   ammoText.gameObject.SetActive(false);
         if (reloadText) reloadText.gameObject.SetActive(true);
     }
 
     private void HideReloadText()
     {
         if (reloadText) reloadText.gameObject.SetActive(false);
-        if (ammoText)   ammoText.gameObject.SetActive(true);  
+        if (ammoText)   ammoText.gameObject.SetActive(true);
     }
+
+    // ── Match result ──────────────────────────────────────────────────────────
 
     private void ShowWinner(TeamID w) =>
         ShowNotification(w == TeamID.TeamA ? "TEAM A WINS! 🍬" : "TEAM B WINS! 🍬", 5f);
@@ -329,23 +431,20 @@ public class HUDManager : MonoBehaviour
         if (swapZonePrompt != null) swapZonePrompt.SetActive(show);
     }
 
-    
+    // ── Weapon changed ────────────────────────────────────────────────────────
+
     public void NotifyWeaponChanged(int index)
     {
-        
         inventoryUI?.SetSelected(index);
 
-        
         if (_player == null) return;
 
         ShooterController sc = _player.GetComponent<ShooterController>();
         WeaponBase w = sc?.GetCurrentWeapon();
-        if (w == null || w == _trackedWeapon) return; 
+        if (w == null || w == _trackedWeapon) return;
 
         if (_trackedWeapon != null)
         {
-            
-            
             if (_trackedWeapon.IsReloading())
                 HideReloadText();
 

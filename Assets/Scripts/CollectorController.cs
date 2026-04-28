@@ -1,3 +1,19 @@
+// CollectorController.cs — Sugar Rush (UPDATED: Smoke Grenade auto-camera fix)
+//
+// ── WHAT CHANGED FROM PREVIOUS VERSION ───────────────────────────────────
+//   BUG FIX — Smoke grenade never fired because playerCamera was null:
+//
+//   • Awake() now auto-finds the Camera component in children (includeInactive=true)
+//     if playerCamera is not manually assigned in the Inspector.
+//     This means you no longer NEED to wire the camera reference by hand,
+//     but you still CAN if you want to be explicit.
+//
+//   • HandleSmokeGrenade() gained a PlayerRole.Collector guard so it can never
+//     fire if the role somehow flips mid-game.
+//
+//   • No throw-direction logic changed — pressing 4 already threw toward the
+//     camera forward. That behaviour is preserved exactly.
+
 using System.Collections;
 using System.Collections.Generic;
 using Unity.Netcode;
@@ -20,17 +36,39 @@ public class CollectorController : NetworkBehaviour
     [Header("Decoy")]
     public GameObject decoyPrefab;
     public float      decoyCooldown       = 20f;
-    public float      decoyWindowDuration = 5f;  // seconds to use 2nd charge before cooldown auto-starts
+    public float      decoyWindowDuration = 5f;
     public int        decoyMaxCharges     = 2;
 
+    [Header("Smoke Grenade")]
+    [Tooltip("Drag your SmokeGrenade prefab here.")]
+    public GameObject smokeGrenadePrefab;
+
+    [Tooltip("Optional — leave empty and the script will find the Camera in children automatically.")]
+    public Camera playerCamera;
+
+    [Tooltip("How fast the grenade travels forward (m/s).")]
+    public float smokeThrowForce    = 14f;
+
+    [Tooltip("Upward component added to the throw velocity for the arc.")]
+    public float smokeThrowArc      = 5.5f;
+
+    [Tooltip("Maximum number of smoke grenades before the cooldown starts.")]
+    public int   smokeMaxCharges    = 2;
+
+    [Tooltip("Seconds to recharge both smoke grenades after both are used.")]
+    public float smokeGrenadeCooldown = 25f;
+
     [Header("HUD events")]
-    public UnityEvent<int>   onCandyCountChanged  = new();
-    public UnityEvent<float> onSuperSpeedCooldown = new();
-    public UnityEvent<float> onDecoyCooldown      = new();
-    public UnityEvent<int>   onDecoyChargesChanged = new();  // fires with current charge count (0-2)
-    public UnityEvent<float> onDecoyWindow         = new();  // fires with remaining window time (0-5s)
-    
-    public UnityEvent        onDecoyFired         = new();
+    public UnityEvent<int>   onCandyCountChanged   = new();
+    public UnityEvent<float> onSuperSpeedCooldown  = new();
+    public UnityEvent<float> onDecoyCooldown       = new();
+    public UnityEvent<int>   onDecoyChargesChanged = new();
+    public UnityEvent<float> onDecoyWindow         = new();
+    public UnityEvent        onDecoyFired          = new();
+
+    public UnityEvent<float> onSmokeGrenadeCooldown = new();
+    public UnityEvent<int>   onSmokeChargesChanged  = new();
+    public UnityEvent        onSmokeGrenadeFired    = new();
 
     public NetworkVariable<int> carriedCount = new(0,
         NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
@@ -42,12 +80,15 @@ public class CollectorController : NetworkBehaviour
     private PlayerStats      _stats;
 
     private float _superSpeedTimer;
-    private float _decoyTimer;       // cooldown countdown — charges restore when this hits 0
-    private float _decoyWindowTimer; // 5s use-window countdown after first charge is spent
-    private bool  _inDecoyWindow;    // true while window is open
-    private int   _decoyCharges;     // current available charges (0-decoyMaxCharges)
+    private float _decoyTimer;
+    private float _decoyWindowTimer;
+    private bool  _inDecoyWindow;
+    private int   _decoyCharges;
     private bool  _superSpeedActive;
     private float _currentPenalty = 1f;
+
+    private int   _smokeCharges;
+    private float _smokeTimer;
 
     private readonly List<Candy> _carriedCandies = new();
 
@@ -55,6 +96,16 @@ public class CollectorController : NetworkBehaviour
     {
         _pc    = GetComponent<PlayerController>();
         _stats = GetComponent<PlayerStats>();
+
+        // ── FIX: Auto-find the camera if not wired in the Inspector ──────────
+        // includeInactive:true is required because PlayerSetup disables the
+        // camera GameObject for non-owners before this script runs.
+        if (playerCamera == null)
+            playerCamera = GetComponentInChildren<Camera>(true);
+
+        if (playerCamera == null)
+            Debug.LogWarning("[CollectorController] Could not find a Camera in children. " +
+                             "Assign playerCamera manually in the Inspector if smoke grenade still fails.");
     }
 
     public override void OnNetworkSpawn()
@@ -63,8 +114,8 @@ public class CollectorController : NetworkBehaviour
         if (IsServer) _stats.onDeath.AddListener(OnDied);
         if (!IsOwner) { enabled = false; return; }
 
-        // Start with full charges
         _decoyCharges = decoyMaxCharges;
+        _smokeCharges = smokeMaxCharges;
     }
 
     public override void OnNetworkDespawn()
@@ -79,10 +130,12 @@ public class CollectorController : NetworkBehaviour
         HandlePickup();
         HandleSuperSpeed();
         HandleDecoy();
+        HandleSmokeGrenade();
         TickCooldowns();
     }
 
-    
+    // ── Pickup ────────────────────────────────────────────────────────────────
+
     private void HandlePickup()
     {
         if (_stats.role.Value != PlayerRole.Collector) return;
@@ -117,7 +170,8 @@ public class CollectorController : NetworkBehaviour
         CandySpawner.Instance?.NotifyCandyPickedUp(candy);
     }
 
-    
+    // ── Drop / Deliver ────────────────────────────────────────────────────────
+
     public void DropAllCandiesServer()
     {
         if (!IsServer) return;
@@ -141,7 +195,6 @@ public class CollectorController : NetworkBehaviour
         carriedCount.Value = 0;
     }
 
-    
     public void DeliverCandiesServer(TeamID scoringTeam)
     {
         if (!IsServer) return;
@@ -153,7 +206,8 @@ public class CollectorController : NetworkBehaviour
         NetworkGameManager.Instance?.AddScore(scoringTeam, count);
     }
 
-    
+    // ── Candy count change ────────────────────────────────────────────────────
+
     private void OnCarriedCountChanged(int prev, int next)
     {
         if (!IsOwner) return;
@@ -162,7 +216,8 @@ public class CollectorController : NetworkBehaviour
         onCandyCountChanged?.Invoke(next);
     }
 
-    
+    // ── Super Speed ───────────────────────────────────────────────────────────
+
     private void HandleSuperSpeed()
     {
         if (Input.GetKeyDown(KeyCode.E) && _superSpeedTimer <= 0f && !_superSpeedActive)
@@ -171,22 +226,22 @@ public class CollectorController : NetworkBehaviour
 
     private IEnumerator SuperSpeedRoutine()
     {
-        _superSpeedActive        = true;
-        superSpeedActive.Value   = true;
-        _pc.speedMultiplier      = _currentPenalty * superSpeedMultiplier;
+        _superSpeedActive      = true;
+        superSpeedActive.Value = true;
+        _pc.speedMultiplier    = _currentPenalty * superSpeedMultiplier;
 
         yield return new WaitForSeconds(superSpeedDuration);
 
-        _pc.speedMultiplier      = _currentPenalty;
-        _superSpeedActive        = false;
-        superSpeedActive.Value   = false;
-        _superSpeedTimer         = superSpeedCooldown;
+        _pc.speedMultiplier    = _currentPenalty;
+        _superSpeedActive      = false;
+        superSpeedActive.Value = false;
+        _superSpeedTimer       = superSpeedCooldown;
     }
 
-    
+    // ── Decoy ─────────────────────────────────────────────────────────────────
+
     private void HandleDecoy()
     {
-        // Q pressed, have a charge, and cooldown is not running
         if (Input.GetKeyDown(KeyCode.Q) && _decoyCharges > 0 && _decoyTimer <= 0f)
         {
             SpawnDecoyRpc(transform.position, transform.forward,
@@ -198,14 +253,12 @@ public class CollectorController : NetworkBehaviour
 
             if (_decoyCharges > 0)
             {
-                // First charge spent — open the 5-second use window for the second charge
                 _inDecoyWindow    = true;
                 _decoyWindowTimer = decoyWindowDuration;
                 onDecoyWindow?.Invoke(_decoyWindowTimer);
             }
             else
             {
-                // Both charges spent (used 2nd in window) — close window, start cooldown
                 _inDecoyWindow    = false;
                 _decoyWindowTimer = 0f;
                 _decoyTimer       = decoyCooldown;
@@ -229,7 +282,6 @@ public class CollectorController : NetworkBehaviour
 
         obj.GetComponent<NetworkObject>()?.Spawn(true);
 
-        // Set synced team AFTER Spawn() so the NetworkVariable is live
         if (decoyAI != null)
             decoyAI.syncedTeam.Value = _stats.team.Value;
 
@@ -261,7 +313,114 @@ public class CollectorController : NetworkBehaviour
         return fromPos;
     }
 
-    
+    // ── Smoke Grenade (Key 4) ─────────────────────────────────────────────────
+    //
+    // Press 4 → grenade is instantly thrown toward wherever the camera is aimed.
+    // No "equip then throw" step; the throw happens in one keypress.
+
+    private void HandleSmokeGrenade()
+    {
+        // Role guard — only Collectors can throw smoke.
+        if (_stats.role.Value != PlayerRole.Collector) return;
+
+        if (!Input.GetKeyDown(KeyCode.Alpha4)) return;
+        if (_smokeCharges <= 0 || _smokeTimer > 0f) return;
+
+        // ── Camera null-check with helpful message ────────────────────────────
+        if (playerCamera == null)
+        {
+            Debug.LogError("[CollectorController] HandleSmokeGrenade: playerCamera is still null. " +
+                           "The auto-find in Awake() failed — assign it manually in the Inspector.");
+            return;
+        }
+
+        // ── FIX: Flatten forward for spawn position ───────────────────────────
+        //
+        // PROBLEM (camera bob when throwing):
+        //   The old code used playerCamera.transform.forward directly for the
+        //   spawn offset. Camera forward includes vertical pitch. Looking down
+        //   even slightly pulls the spawn point DOWN into the CharacterController
+        //   capsule. The grenade Rigidbody then depenetrates outward, physically
+        //   nudging the CC — causing _isGrounded to flicker for one frame, which
+        //   triggers the landing-camera-bob in PlayerController.
+        //
+        // FIX:
+        //   Flatten the forward vector (zero out Y, renormalize) so the spawn
+        //   point is always at a fixed height above the player's root regardless
+        //   of where the camera is pitched. 1 m forward puts it well outside the
+        //   CC capsule (typical radius 0.35–0.5 m). The throw VELOCITY still uses
+        //   the real camera forward (with pitch) so the grenade flies toward the
+        //   crosshair as expected.
+        Vector3 flatForward = playerCamera.transform.forward;
+        flatForward.y = 0f;
+        if (flatForward.sqrMagnitude < 0.001f)
+            flatForward = transform.forward;   // looking straight up/down fallback
+        flatForward.Normalize();
+
+        // Spawn at shoulder height, 1 m in front — always outside the capsule.
+        Vector3 spawnPos = transform.position
+                         + Vector3.up  * 1.5f
+                         + flatForward * 1.0f;
+
+        // Throw direction still follows actual camera aim (pitch included).
+        // This is what makes the grenade fly toward wherever you're aiming.
+        Vector3 velocity = playerCamera.transform.forward * smokeThrowForce
+                         + Vector3.up                     * smokeThrowArc;
+
+        ThrowSmokeGrenadeRpc(spawnPos, velocity);
+
+        _smokeCharges--;
+        onSmokeGrenadeFired?.Invoke();
+        onSmokeChargesChanged?.Invoke(_smokeCharges);
+
+        // Cooldown only kicks in once ALL charges are spent.
+        if (_smokeCharges <= 0)
+            _smokeTimer = smokeGrenadeCooldown;
+    }
+
+    [Rpc(SendTo.Server)]
+    private void ThrowSmokeGrenadeRpc(Vector3 spawnPos, Vector3 velocity)
+    {
+        if (smokeGrenadePrefab == null)
+        {
+            Debug.LogError("[CollectorController] smokeGrenadePrefab is not assigned!");
+            return;
+        }
+
+        Quaternion rot = velocity.sqrMagnitude > 0.01f
+            ? Quaternion.LookRotation(velocity.normalized)
+            : Quaternion.identity;
+
+        GameObject obj = Instantiate(smokeGrenadePrefab, spawnPos, rot);
+        NetworkObject no = obj.GetComponent<NetworkObject>();
+
+        if (no == null)
+        {
+            Debug.LogError("[CollectorController] smokeGrenadePrefab is missing a NetworkObject!");
+            Destroy(obj);
+            return;
+        }
+
+        no.Spawn(true);
+
+        // ── FIX: Ignore collision between grenade and its thrower ─────────────
+        //
+        // Belt-and-suspenders safety net on top of the spawn-position fix.
+        // If the grenade ever ends up close to the player (e.g. spawning near
+        // a wall pushes it back), it must not be able to physically interact
+        // with the thrower's own colliders (including the CharacterController,
+        // which inherits from Collider). Without this, Rigidbody depenetration
+        // can nudge the CC and re-trigger the landing-camera-bob.
+        Collider grenadeCol = obj.GetComponent<Collider>();
+        if (grenadeCol != null)
+            foreach (Collider pc in GetComponentsInChildren<Collider>(true))
+                Physics.IgnoreCollision(grenadeCol, pc, true);
+
+        obj.GetComponent<SmokeGrenade>()?.Initialize(velocity, _stats.team.Value);
+    }
+
+    // ── Cooldown ticks ────────────────────────────────────────────────────────
+
     private void TickCooldowns()
     {
         if (_superSpeedTimer > 0f)
@@ -270,7 +429,6 @@ public class CollectorController : NetworkBehaviour
             onSuperSpeedCooldown?.Invoke(Mathf.Max(_superSpeedTimer, 0f));
         }
 
-        // ── Decoy use-window countdown ────────────────────────────────────
         if (_inDecoyWindow)
         {
             _decoyWindowTimer -= Time.deltaTime;
@@ -278,7 +436,6 @@ public class CollectorController : NetworkBehaviour
 
             if (_decoyWindowTimer <= 0f)
             {
-                // Window expired without using 2nd charge — start cooldown now
                 _inDecoyWindow    = false;
                 _decoyWindowTimer = 0f;
                 _decoyTimer       = decoyCooldown;
@@ -286,7 +443,6 @@ public class CollectorController : NetworkBehaviour
             }
         }
 
-        // ── Decoy cooldown countdown ──────────────────────────────────────
         if (_decoyTimer > 0f)
         {
             _decoyTimer -= Time.deltaTime;
@@ -294,11 +450,24 @@ public class CollectorController : NetworkBehaviour
 
             if (_decoyTimer <= 0f)
             {
-                // Cooldown finished — restore all charges
                 _decoyTimer   = 0f;
                 _decoyCharges = decoyMaxCharges;
                 onDecoyCooldown?.Invoke(0f);
                 onDecoyChargesChanged?.Invoke(_decoyCharges);
+            }
+        }
+
+        if (_smokeTimer > 0f)
+        {
+            _smokeTimer -= Time.deltaTime;
+            onSmokeGrenadeCooldown?.Invoke(Mathf.Max(_smokeTimer, 0f));
+
+            if (_smokeTimer <= 0f)
+            {
+                _smokeTimer   = 0f;
+                _smokeCharges = smokeMaxCharges;
+                onSmokeGrenadeCooldown?.Invoke(0f);
+                onSmokeChargesChanged?.Invoke(_smokeCharges);
             }
         }
     }

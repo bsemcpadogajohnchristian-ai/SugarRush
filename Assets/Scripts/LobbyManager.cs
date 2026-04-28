@@ -9,7 +9,7 @@ public class LobbyManager : NetworkBehaviour
     public static LobbyManager Instance { get; private set; }
 
     
-    private const int PLAYERS_NEEDED = 4;
+    private const int PLAYERS_NEEDED = 2;
 
     [Header("Setup")]
     public GameObject playerPrefab;

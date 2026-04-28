@@ -174,7 +174,6 @@ public class ShooterController : NetworkBehaviour
         HandleScope();
         HandleReload();
         HandleInventory();
-        HandleQuickSwap();
     }
 
     // ── FIX: Rifle auto-fire animation stops when ammo runs out ─────────────
@@ -249,14 +248,6 @@ public class ShooterController : NetworkBehaviour
         _inventoryOpen = !_inventoryOpen;
         HUDManager.Instance?.SetInventoryVisible(_inventoryOpen);
         Cursor.lockState = _inventoryOpen ? CursorLockMode.None : CursorLockMode.Locked;
-    }
-
-    private void HandleQuickSwap()
-    {
-        if      (Input.GetKeyDown(KeyCode.Alpha1)) EquipWeapon(0);
-        else if (Input.GetKeyDown(KeyCode.Alpha2)) EquipWeapon(1);
-        else if (Input.GetKeyDown(KeyCode.Alpha3)) EquipWeapon(2);
-        else if (Input.GetKeyDown(KeyCode.Alpha4)) EquipWeapon(3);
     }
 
     public void SetInSwapZone(bool inside)
