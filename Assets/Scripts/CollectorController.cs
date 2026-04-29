@@ -403,20 +403,16 @@ public class CollectorController : NetworkBehaviour
 
         no.Spawn(true);
 
-        // ── FIX: Ignore collision between grenade and its thrower ─────────────
+        // ── Collision ignore is now handled inside SmokeGrenade.Initialize() ──
         //
-        // Belt-and-suspenders safety net on top of the spawn-position fix.
-        // If the grenade ever ends up close to the player (e.g. spawning near
-        // a wall pushes it back), it must not be able to physically interact
-        // with the thrower's own colliders (including the CharacterController,
-        // which inherits from Collider). Without this, Rigidbody depenetration
-        // can nudge the CC and re-trigger the landing-camera-bob.
-        Collider grenadeCol = obj.GetComponent<Collider>();
-        if (grenadeCol != null)
-            foreach (Collider pc in GetComponentsInChildren<Collider>(true))
-                Physics.IgnoreCollision(grenadeCol, pc, true);
-
-        obj.GetComponent<SmokeGrenade>()?.Initialize(velocity, _stats.team.Value);
+        // SmokeGrenade.IgnoreThrowerCollisions() runs on both the server AND
+        // every client (via SyncThrowClientRpc), so passing NetworkObjectId here
+        // is all that's needed. The old server-only Physics.IgnoreCollision block
+        // that lived here has been removed — it only covered the server's physics
+        // scene and left clients unprotected, which was the root cause of the
+        // grenade sometimes not appearing (client-side Rigidbody depenetration
+        // deflecting the grenade before it was ever rendered).
+        obj.GetComponent<SmokeGrenade>()?.Initialize(velocity, _stats.team.Value, NetworkObjectId);
     }
 
     // ── Cooldown ticks ────────────────────────────────────────────────────────
