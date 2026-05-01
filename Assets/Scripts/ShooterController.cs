@@ -1,47 +1,26 @@
 // ShooterController.cs — Sugar Rush
 //
-// ── FP / 3P WEAPON ARCHITECTURE ─────────────────────────────────────────────
+// ── SMOKE GRENADE ADDED ───────────────────────────────────────────────────────
+//   The smoke grenade ability has been moved FROM CollectorController TO here.
+//   Press Alpha4 to throw a smoke grenade toward wherever the camera is aimed.
 //
-//  PROBLEM (double gun, no muzzle flash for observers):
-//    availableWeapons holds the FP weapon GameObjects (children of fpShooterArms).
-//    For non-owners, fpShooterArms is inactive → those GameObjects are inaccessible
-//    → BroadcastMuzzleFlashRpc called PlayMuzzleFlashLocal() on a disabled object
-//    → no muzzle flash and no fire audio were ever produced for spectating clients.
-//    The FP weapons were also not on the "Arms" layer, so the main camera rendered
-//    them alongside the 3P body weapon → two guns visible to the owner.
+//   New Inspector fields (Smoke Grenade header):
+//     smokeGrenadePrefab    — drag your SmokeGrenade prefab
+//     smokeThrowForce       — forward throw speed (m/s)
+//     smokeThrowArc         — upward arc component
+//     smokeMaxCharges       — charges before cooldown kicks in
+//     smokeGrenadeCooldown  — seconds to recharge both charges
 //
-//  FIX — two-weapon-set pattern (standard in production FPS games):
+//   New events:
+//     onSmokeGrenadeFired     — fires locally on throw (used by FPShooterAnimator)
+//     onSmokeGrenadeCooldown  — float, remaining cooldown seconds (used by HUDManager)
+//     onSmokeChargesChanged   — int, current charges (used by HUDManager)
 //
-//    FP set  (availableWeapons):  WeaponBase scripts + FP meshes + FP audio.
-//      • Lives under fpShooterArms (child of CameraHolder).
-//      • PlayerSetup.SetLayerRecursively stamps the entire hierarchy with the
-//        "Arms" layer → ArmsCamera (Overlay, Culling Mask = Arms only) is the
-//        sole renderer; main camera excludes Arms → owner never sees FP arms
-//        through the main camera.
-//      • Only the owner activates fpShooterArms. All game logic (firing, reload,
-//        ammo) runs here. FP muzzle flash plays via PlayMuzzleFlashLocal().
+//   New NV:
+//     PlayerStats.smokeThrowSequence — incremented per throw so ShooterAnimator
+//     can fire the "ThrowSmoke" trigger on ALL clients (3P animation).
 //
-//    3P set  (thirdPersonWeapons):  Pure-visual GameObjects on the body rig.
-//      • Parented to the hand bone on Body_Shooter (or as children of it).
-//      • Switched by ApplyWeaponVisibility() on ALL clients via equippedWeaponIndex.
-//      • On the owner: bodyShooter renderers are disabled (PlayerSetup), so the
-//        3P weapon is invisible to the owner — only the FP set is seen.
-//      • On non-owners: fpShooterArms is inactive; bodyShooter is visible; the
-//        active 3P weapon is the one observers see.
-//
-//    Effects:
-//      Owner     — FP muzzle flash on FP weapon muzzle, seen via ArmsCamera.
-//                  Impact FX spawned at world position → visible to all cameras.
-//      Non-owner — BroadcastMuzzleFlashRpc uses thirdPersonMuzzles[i] to spawn
-//                  3P muzzle flash at the correct world position on the body rig.
-//                  Audio played via sharedWeaponAudio (always-active AudioSource
-//                  on the player root, never under a disabled parent).
-//
-//  INSPECTOR SETUP (per slot, must match availableWeapons order):
-//    thirdPersonWeapons[i]  — the 3P weapon mesh GameObject on Body_Shooter's hand bone
-//    thirdPersonMuzzles[i]  — Transform at the 3P weapon's barrel tip
-//    thirdPersonMuzzleFX[i] — muzzle flash prefab (can reuse the same as FP or make a smaller one)
-//    sharedWeaponAudio      — AudioSource on the Player root (always active)
+//   All existing FP/3P weapon architecture is unchanged.
 
 using System.Collections;
 using System.Collections.Generic;
@@ -54,33 +33,41 @@ public class ShooterController : NetworkBehaviour
     [Header("Weapons — FP set (WeaponBase scripts, children of fpShooterArms)")]
     public List<WeaponBase> availableWeapons = new();
 
-    // ── 3P weapon visuals ────────────────────────────────────────────────────
     [Header("Weapons — 3P set (pure-visual meshes on Body_Shooter hand bone)")]
-    [Tooltip("One entry per availableWeapons slot, same order.\n" +
-             "Each GameObject is the 3P mesh that represents that weapon on the body rig.\n" +
-             "ApplyWeaponVisibility enables the active one and disables the rest on ALL clients.")]
-    public List<GameObject> thirdPersonWeapons = new();
-
-    [Tooltip("One entry per availableWeapons slot, same order.\n" +
-             "The Transform at the barrel tip of each 3P weapon mesh.\n" +
-             "BroadcastMuzzleFlashRpc spawns the muzzle-flash FX here for non-owners.")]
-    public List<Transform>  thirdPersonMuzzles = new();
-
-    [Tooltip("One entry per availableWeapons slot, same order.\n" +
-             "The muzzle-flash VFX prefab for each 3P weapon.\n" +
-             "Can be the same prefab as the FP weapon's muzzleFlashFX or a smaller version.")]
+    public List<GameObject> thirdPersonWeapons  = new();
+    public List<Transform>  thirdPersonMuzzles  = new();
     public List<GameObject> thirdPersonMuzzleFX = new();
 
     [Header("Audio")]
-    [Tooltip("AudioSource on the Player root (NOT under fpShooterArms).\n" +
-             "Must be always-active so non-owner clients hear fire and reload sounds\n" +
-             "even though fpShooterArms is disabled on their end.")]
     public AudioSource sharedWeaponAudio;
 
     [Header("Camera")]
     public Camera playerCamera;
     public float  defaultFOV = 70f;
     public float  scopedFOV  = 30f;
+
+    // ── NEW: Smoke Grenade ────────────────────────────────────────────────────
+    [Header("Smoke Grenade")]
+    [Tooltip("Drag your SmokeGrenade prefab here.")]
+    public GameObject smokeGrenadePrefab;
+
+    [Tooltip("How fast the grenade travels forward (m/s).")]
+    public float smokeThrowForce    = 14f;
+
+    [Tooltip("Upward component added to throw velocity for the arc.")]
+    public float smokeThrowArc      = 5.5f;
+
+    [Tooltip("Maximum charges before the cooldown starts.")]
+    public int   smokeMaxCharges    = 2;
+
+    [Tooltip("Seconds to recharge all charges after they are spent.")]
+    public float smokeGrenadeCooldown = 25f;
+
+    // ── NEW: Smoke events (consumed by FPShooterAnimator and HUDManager) ─────
+    public UnityEvent        onSmokeGrenadeFired    = new();
+    public UnityEvent<float> onSmokeGrenadeCooldown = new();
+    public UnityEvent<int>   onSmokeChargesChanged  = new();
+    // ─────────────────────────────────────────────────────────────────────────
 
     public UnityEvent<int>  onWeaponEquipped = new();
     public UnityEvent<bool> onScopeChanged   = new();
@@ -93,6 +80,11 @@ public class ShooterController : NetworkBehaviour
     private bool        _inSwapZone;
     private PlayerStats _stats;
 
+    // ── NEW: Smoke state ──────────────────────────────────────────────────────
+    private int   _smokeCharges;
+    private float _smokeTimer;
+    // ─────────────────────────────────────────────────────────────────────────
+
     public int CurrentWeaponIndex => _currentIndex;
 
     private void Awake() => _stats = GetComponent<PlayerStats>();
@@ -102,12 +94,14 @@ public class ShooterController : NetworkBehaviour
         if (!IsOwner)
         {
             enabled = false;
-
-            // Drive both FP and 3P weapon visibility from the NV on non-owners.
             ApplyWeaponVisibility(_stats.equippedWeaponIndex.Value);
             _stats.equippedWeaponIndex.OnValueChanged += OnWeaponIndexChanged;
             return;
         }
+
+        // ── NEW: initialise smoke charges for the local owner ─────────────────
+        _smokeCharges = smokeMaxCharges;
+        // ─────────────────────────────────────────────────────────────────────
 
         EquipWeapon(0);
         HUDManager.Instance?.SetInventoryVisible(false);
@@ -140,26 +134,14 @@ public class ShooterController : NetworkBehaviour
 
     private void OnWeaponIndexChanged(int prev, int next) => ApplyWeaponVisibility(next);
 
-    // ── ApplyWeaponVisibility ────────────────────────────────────────────────
-    //
-    // Switches both the FP set (availableWeapons) and the 3P set (thirdPersonWeapons)
-    // so the correct mesh is shown in each context:
-    //
-    //   Owner         FP weapon[i] active  |  3P weapon[i] active (body hidden anyway)
-    //   Non-owner     FP weapons N/A        |  3P weapon[i] active (body visible)
-    //
-    // Called on owner from EquipWeapon(), on non-owners from the NV callback.
     private void ApplyWeaponVisibility(int index)
     {
-        // FP weapons — only meaningful when fpShooterArms is active (owner side).
         for (int i = 0; i < availableWeapons.Count; i++)
         {
             if (availableWeapons[i] != null)
                 availableWeapons[i].gameObject.SetActive(i == index);
         }
 
-        // 3P weapons — meaningful for ALL clients (non-owner sees body; owner has
-        // body hidden but no harm done setting this for correctness).
         for (int i = 0; i < thirdPersonWeapons.Count; i++)
         {
             if (thirdPersonWeapons[i] != null)
@@ -174,9 +156,101 @@ public class ShooterController : NetworkBehaviour
         HandleScope();
         HandleReload();
         HandleInventory();
+        HandleSmokeGrenade();   // ← NEW
+        TickSmokeCooldown();    // ← NEW
     }
 
-    // ── FIX: Rifle auto-fire animation stops when ammo runs out ─────────────
+    // ── NEW: Smoke grenade input & throw ──────────────────────────────────────
+
+    private void HandleSmokeGrenade()
+    {
+        if (_stats.role.Value != PlayerRole.Shooter) return;
+        if (!Input.GetKeyDown(KeyCode.Alpha4)) return;
+        if (_smokeCharges <= 0 || _smokeTimer > 0f) return;
+
+        if (playerCamera == null)
+        {
+            Debug.LogError("[ShooterController] HandleSmokeGrenade: playerCamera is null. " +
+                           "Assign it in the Inspector.");
+            return;
+        }
+
+        // Flatten forward for spawn position so looking up/down doesn't pull
+        // the spawn point into the CharacterController capsule.
+        Vector3 flatForward = playerCamera.transform.forward;
+        flatForward.y = 0f;
+        if (flatForward.sqrMagnitude < 0.001f) flatForward = transform.forward;
+        flatForward.Normalize();
+
+        // Spawn at shoulder height, 1 m in front — always outside the capsule.
+        Vector3 spawnPos = transform.position
+                         + Vector3.up  * 1.5f
+                         + flatForward * 1.0f;
+
+        // Throw direction follows actual camera aim (pitch included).
+        Vector3 velocity = playerCamera.transform.forward * smokeThrowForce
+                         + Vector3.up                     * smokeThrowArc;
+
+        ThrowSmokeGrenadeServerRpc(spawnPos, velocity);
+
+        // ── Local owner feedback ──────────────────────────────────────────────
+        _smokeCharges--;
+        onSmokeGrenadeFired?.Invoke();
+        onSmokeChargesChanged?.Invoke(_smokeCharges);
+
+        // Increment NV so ShooterAnimator fires the 3P throw trigger everywhere.
+        if (_stats != null) _stats.smokeThrowSequence.Value++;
+
+        // Cooldown starts only once ALL charges are spent.
+        if (_smokeCharges <= 0)
+            _smokeTimer = smokeGrenadeCooldown;
+    }
+
+    [Rpc(SendTo.Server)]
+    private void ThrowSmokeGrenadeServerRpc(Vector3 spawnPos, Vector3 velocity)
+    {
+        if (smokeGrenadePrefab == null)
+        {
+            Debug.LogError("[ShooterController] smokeGrenadePrefab is not assigned!");
+            return;
+        }
+
+        Quaternion rot = velocity.sqrMagnitude > 0.01f
+            ? Quaternion.LookRotation(velocity.normalized)
+            : Quaternion.identity;
+
+        GameObject    obj = Instantiate(smokeGrenadePrefab, spawnPos, rot);
+        NetworkObject no  = obj.GetComponent<NetworkObject>();
+
+        if (no == null)
+        {
+            Debug.LogError("[ShooterController] smokeGrenadePrefab is missing a NetworkObject!");
+            Destroy(obj);
+            return;
+        }
+
+        no.Spawn(true);
+        obj.GetComponent<SmokeGrenade>()?.Initialize(velocity, _stats.team.Value, NetworkObjectId);
+    }
+
+    private void TickSmokeCooldown()
+    {
+        if (_smokeTimer <= 0f) return;
+
+        _smokeTimer -= Time.deltaTime;
+        onSmokeGrenadeCooldown?.Invoke(Mathf.Max(_smokeTimer, 0f));
+
+        if (_smokeTimer <= 0f)
+        {
+            _smokeTimer   = 0f;
+            _smokeCharges = smokeMaxCharges;
+            onSmokeGrenadeCooldown?.Invoke(0f);
+            onSmokeChargesChanged?.Invoke(_smokeCharges);
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+
     private void HandleFire()
     {
         if (_inventoryOpen || _current == null) return;
@@ -281,7 +355,6 @@ public class ShooterController : NetworkBehaviour
         _currentIndex = index;
         _current      = availableWeapons[index];
 
-        // ApplyWeaponVisibility handles both FP and 3P weapon sets.
         ApplyWeaponVisibility(_currentIndex);
 
         _current.onFired.AddListener(OnCurrentWeaponFired);
@@ -350,23 +423,9 @@ public class ShooterController : NetworkBehaviour
         }
     }
 
-    // ── BroadcastMuzzleFlashRpc ──────────────────────────────────────────────
-    //
-    // FIX: Previously called availableWeapons[i].PlayMuzzleFlashLocal() on
-    // non-owners. Those weapons are children of disabled fpShooterArms →
-    // inactive → PlayMuzzleFlashLocal is a no-op → observers saw nothing.
-    //
-    // NEW BEHAVIOUR for non-owners:
-    //   • Spawn 3P muzzle flash at thirdPersonMuzzles[weaponIndex] using FXPool.
-    //   • Play fire audio via sharedWeaponAudio (always-active AudioSource on
-    //     the player root — never under a disabled parent GameObject).
-    //
-    // Owner receives this RPC on the FP side (TryFire → PlayMuzzleFlashLocal)
-    // and never enters this path because SendTo.NotOwner excludes them.
     [Rpc(SendTo.NotOwner)]
     public void BroadcastMuzzleFlashRpc(int weaponIndex)
     {
-        // ── 3P muzzle flash ─────────────────────────────────────────────────
         if (weaponIndex >= 0 && weaponIndex < thirdPersonMuzzles.Count)
         {
             Transform   muzzle3P = thirdPersonMuzzles[weaponIndex];
@@ -385,15 +444,11 @@ public class ShooterController : NetworkBehaviour
             }
         }
 
-        // ── Fire audio via shared (always-active) AudioSource ───────────────
         if (weaponIndex >= 0 && weaponIndex < availableWeapons.Count)
         {
             WeaponBase w = availableWeapons[weaponIndex];
             if (w?.fireSound != null)
             {
-                // Prefer sharedWeaponAudio (on the player root, always active).
-                // Fall back to the FP weapon's own AudioSource only if the root
-                // source wasn't assigned in the Inspector.
                 AudioSource src = sharedWeaponAudio != null ? sharedWeaponAudio : w.audioSource;
                 src?.PlayOneShot(w.fireSound);
             }
@@ -427,8 +482,7 @@ public class ShooterController : NetworkBehaviour
         GameObject obj = Instantiate(baz.rocketPrefab, pos, rot);
         obj.GetComponent<NetworkObject>()?.Spawn(true);
         obj.GetComponent<Rocket>()?.Initialize(speed, splashRadius, splashDmg, directDmg,
-            baz.explosionMask, baz.bulletImpactFX, _stats.team.Value,
-            OwnerClientId); // ← kill feed: lets Rocket.Explode attribute the kill
+            baz.explosionMask, baz.bulletImpactFX, _stats.team.Value, OwnerClientId);
     }
 
     public WeaponBase GetCurrentWeapon() => _current;

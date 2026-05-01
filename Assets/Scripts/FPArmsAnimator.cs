@@ -1,15 +1,17 @@
-// FPArmsAnimator.cs — Sugar Rush (UPDATED: Smoke Grenade throw animation)
+// FPArmsAnimator.cs — Sugar Rush
 //
-// ── WHAT CHANGED ──────────────────────────────────────────────────────────
-//   • Added H_ThrowSmoke animator hash (trigger).
-//   • OnEnable subscribes to CollectorController.onSmokeGrenadeFired.
-//   • OnDisable unsubscribes to prevent stale listener references.
-//   • OnSmokeGrenadeFired() fires the ThrowSmoke trigger on the FP arms animator.
-//   • ResetState() clears the new trigger.
+// ── SMOKE GRENADE REMOVED ────────────────────────────────────────────────────
+//   Smoke grenade has been moved to the Shooter role.
+//   Removed from this file:
+//     • H_ThrowSmoke animator hash
+//     • OnEnable subscription to collectorController.onSmokeGrenadeFired
+//     • OnDisable unsubscription
+//     • OnSmokeGrenadeFired() callback
+//     • ResetState() trigger reset for H_ThrowSmoke
 //
-// ── ANIMATOR SETUP REQUIRED ───────────────────────────────────────────────
-//   In your FP Collector Arms Animator Controller, add a trigger parameter
-//   called "ThrowSmoke" and wire it to your throw animation state.
+// Drives the FIRST-PERSON Collector arms Animator on the LOCAL OWNER only.
+// Attach to fpArms — the first-person collector arms root (child of CameraHolder).
+// The GameObject must start INACTIVE in the prefab; PlayerSetup activates it.
 
 using UnityEngine;
 
@@ -37,7 +39,6 @@ public class FPArmsAnimator : MonoBehaviour
     private static readonly int H_DeployDecoy   = Animator.StringToHash("DeployDecoy");
     private static readonly int H_ActivateSpeed = Animator.StringToHash("ActivateSpeed");
     private static readonly int H_Jump          = Animator.StringToHash("Jump");
-    private static readonly int H_ThrowSmoke    = Animator.StringToHash("ThrowSmoke"); // ← NEW
 
     // ── Runtime fields ────────────────────────────────────────────────────────
 
@@ -65,7 +66,6 @@ public class FPArmsAnimator : MonoBehaviour
         if (collectorController != null)
         {
             collectorController.onDecoyFired.AddListener(OnDecoyFired);
-            collectorController.onSmokeGrenadeFired.AddListener(OnSmokeGrenadeFired); // ← NEW
             _lastCarriedCount = collectorController.GetCarriedCount();
         }
 
@@ -78,7 +78,6 @@ public class FPArmsAnimator : MonoBehaviour
         if (collectorController != null)
         {
             collectorController.onDecoyFired.RemoveListener(OnDecoyFired);
-            collectorController.onSmokeGrenadeFired.RemoveListener(OnSmokeGrenadeFired); // ← NEW
         }
     }
 
@@ -148,14 +147,6 @@ public class FPArmsAnimator : MonoBehaviour
         _anim.SetTrigger(H_DeployDecoy);
     }
 
-    // ── NEW: Smoke grenade throw ──────────────────────────────────────────────
-    private void OnSmokeGrenadeFired()
-    {
-        _anim.ResetTrigger(H_ThrowSmoke);
-        _anim.SetTrigger(H_ThrowSmoke);
-    }
-    // ─────────────────────────────────────────────────────────────────────────
-
     // ── ResetState ────────────────────────────────────────────────────────────
 
     public void ResetState()
@@ -170,7 +161,6 @@ public class FPArmsAnimator : MonoBehaviour
         _anim.ResetTrigger(H_DeployDecoy);
         _anim.ResetTrigger(H_ActivateSpeed);
         _anim.ResetTrigger(H_Jump);
-        _anim.ResetTrigger(H_ThrowSmoke);  // ← NEW
         _anim.SetFloat(H_Speed, 0f);
     }
 }

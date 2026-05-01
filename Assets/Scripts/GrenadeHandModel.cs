@@ -1,29 +1,34 @@
 // GrenadeHandModel.cs — Sugar Rush
 //
-// ── BUG FIX ───────────────────────────────────────────────────────────────────
-//   BEFORE: OnThrown() called gameObject.SetActive(false) on the same GameObject
-//           this script lives on. That pauses Update(), so _hideTimer never counts
-//           down and the grenade mesh never comes back.
+// ── SMOKE GRENADE MIGRATION ───────────────────────────────────────────────────
+//   Rewired from CollectorController to ShooterController.
 //
-//   AFTER:  We toggle a dedicated meshRoot child (or fall back to all Renderers
-//           on this object's children) so the script itself stays active and
-//           Update() keeps ticking.
+//   WHAT CHANGED:
+//     • _collector field replaced with _shooter (ShooterController).
+//     • Awake() searches GetComponentInParent<ShooterController>().
+//     • OnEnable() / OnDisable() subscribe to shooter.onSmokeChargesChanged
+//       and shooter.onSmokeGrenadeFired instead of collector equivalents.
+//     • _lastKnownCharges initialised from shooter.smokeMaxCharges.
+//     • All logic (hide on throw, restore on charges, timer countdown) is
+//       identical to the original — only the event source changed.
 //
 // ── PREFAB SETUP ─────────────────────────────────────────────────────────────
-//   1. Inside your fpArms rig, find the right-hand bone (e.g. Hand_R).
-//   2. Create an empty child named "GrenadeInHand". Attach THIS script to it.
-//   3. Add a child named "Mesh" (copy the visual from your SmokeGrenade prefab,
-//      strip all physics/network components). Scale to taste (~0.5).
-//   4. Drag that "Mesh" child into the meshRoot field in the Inspector.
-//      If you leave meshRoot empty the script falls back to toggling all
-//      Renderer components found in the children of this GameObject.
-//   5. Set hideOnThrowDuration to roughly match your throw animation length.
+//   Move this GameObject from under the Collector FP arms rig to under the
+//   SHOOTER FP arms rig (fpShooterArms), specifically onto the right-hand bone:
+//     1. Inside fpShooterArms rig, find the right-hand bone (e.g. Hand_R).
+//     2. Create an empty child named "GrenadeInHand". Attach THIS script to it.
+//     3. Add a child named "Mesh" (copy the visual from your SmokeGrenade prefab,
+//        strip all physics/network components). Scale to taste (~0.5).
+//     4. Drag that "Mesh" child into the meshRoot field in the Inspector.
+//        If you leave meshRoot empty the script falls back to toggling all
+//        Renderer components found in the children of this GameObject.
+//     5. Set hideOnThrowDuration to roughly match your throw animation length.
+//     6. This GameObject should ALWAYS remain active — only the mesh inside
+//        it is shown or hidden.
 //
 // ── NOTES ────────────────────────────────────────────────────────────────────
-//   • This GameObject should ALWAYS remain active — only the mesh inside it
-//     is shown or hidden.
-//   • CollectorController is found via GetComponentInParent, so it will be
-//     found as long as this object is a descendant of the player root.
+//   ShooterController is found via GetComponentInParent, so it will be found
+//   as long as this object is a descendant of the Shooter player root.
 
 using UnityEngine;
 
@@ -38,41 +43,40 @@ public class GrenadeHandModel : MonoBehaviour
              "Set this to roughly match your throw animation clip length (0.5–0.8 s).")]
     public float hideOnThrowDuration = 0.6f;
 
-    private CollectorController _collector;
-    private float               _hideTimer;
-    private int                 _lastKnownCharges;
+    private ShooterController _shooter;   // ← WAS CollectorController
+    private float             _hideTimer;
+    private int               _lastKnownCharges;
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     private void Awake()
     {
-        _collector = GetComponentInParent<CollectorController>();
+        _shooter = GetComponentInParent<ShooterController>();   // ← CHANGED
 
-        if (_collector == null)
-            Debug.LogWarning("[GrenadeHandModel] Could not find CollectorController in parents. " +
-                             "Make sure this GameObject is a child of the player root.", this);
+        if (_shooter == null)
+            Debug.LogWarning("[GrenadeHandModel] Could not find ShooterController in parents. " +
+                             "Make sure this GameObject is under the fpShooterArms hierarchy.", this);
     }
 
     private void OnEnable()
     {
-        if (_collector == null) return;
+        if (_shooter == null) return;
 
-        _collector.onSmokeChargesChanged.AddListener(OnChargesChanged);
-        _collector.onSmokeGrenadeFired.AddListener(OnThrown);
+        _shooter.onSmokeChargesChanged.AddListener(OnChargesChanged);   // ← CHANGED
+        _shooter.onSmokeGrenadeFired.AddListener(OnThrown);             // ← CHANGED
 
-        // Sync visual state immediately (in case charges changed while arms were inactive).
-        _lastKnownCharges = _collector.smokeMaxCharges;
+        // Sync visual state immediately.
+        _lastKnownCharges = _shooter.smokeMaxCharges;
         SetMeshVisible(true);
     }
 
     private void OnDisable()
     {
-        if (_collector == null) return;
+        if (_shooter == null) return;
 
-        _collector.onSmokeChargesChanged.RemoveListener(OnChargesChanged);
-        _collector.onSmokeGrenadeFired.RemoveListener(OnThrown);
+        _shooter.onSmokeChargesChanged.RemoveListener(OnChargesChanged);   // ← CHANGED
+        _shooter.onSmokeGrenadeFired.RemoveListener(OnThrown);             // ← CHANGED
 
-        // Reset timer so we don't accidentally stay hidden next activation.
         _hideTimer = 0f;
     }
 
@@ -117,10 +121,7 @@ public class GrenadeHandModel : MonoBehaviour
     private void OnThrown()
     {
         // Hide the mesh during the throw arc.
-        // Update() will re-show it after hideOnThrowDuration seconds if charges
-        // remain, or OnChargesChanged(0) will keep it hidden if they do not.
-        // 
-        // KEY FIX: we hide the child mesh, NOT this GameObject, so Update()
+        // KEY: we hide the child mesh, NOT this GameObject, so Update()
         // keeps running and the timer works correctly.
         SetMeshVisible(false);
         _hideTimer = hideOnThrowDuration;
@@ -128,20 +129,14 @@ public class GrenadeHandModel : MonoBehaviour
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Shows or hides the grenade mesh without touching this GameObject's
-    /// active state, so Update() always keeps running.
-    /// </summary>
     private void SetMeshVisible(bool visible)
     {
         if (meshRoot != null)
         {
-            // Preferred path: toggle the dedicated mesh child.
             meshRoot.SetActive(visible);
         }
         else
         {
-            // Fallback: toggle every Renderer in children.
             foreach (Renderer r in GetComponentsInChildren<Renderer>(includeInactive: true))
                 r.enabled = visible;
         }

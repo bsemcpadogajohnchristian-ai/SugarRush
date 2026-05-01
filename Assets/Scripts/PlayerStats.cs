@@ -1,14 +1,11 @@
 // PlayerStats.cs — Sugar Rush
 // Unity 6.3 LTS + Netcode for GameObjects v2.1+
 //
-// ── KILL FEED CHANGES ─────────────────────────────────────────────────────────
-//   • TakeDamageFrom(float, ulong, string) — new overload that carries killer
-//     clientId and weapon name into DieServer, which forwards them to
-//     NetworkGameManager.OnPlayerKilled for kill-feed broadcasting.
-//   • DieServer now accepts (ulong killerId, string weaponName).
-//     The old zero-arg DieServer is gone; TakeDamage(float) calls the new one
-//     with killerId=0 / weaponName="Unknown" as a safe fallback.
-//   • GetDisplayName() — returns "[TeamA] Shooter" style label for kill feed.
+// ── SMOKE GRENADE MIGRATION ───────────────────────────────────────────────────
+//   Added smokeThrowSequence NetworkVariable (Owner-write, like jumpSequence).
+//   ShooterController increments it each time the owner throws a smoke grenade.
+//   ShooterAnimator watches it to fire the "ThrowSmoke" trigger on ALL clients
+//   so the 3P throw animation plays for everyone, not just the local owner.
 
 using Unity.Netcode;
 using UnityEngine;
@@ -42,6 +39,14 @@ public class PlayerStats : NetworkBehaviour
     // ── Shooter animation NVs ─────────────────────────────────────────────────
 
     public NetworkVariable<int> shootFireSequence = new(0,
+        NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Owner);
+
+    /// <summary>
+    /// Incremented by ShooterController each time the owner throws a smoke grenade.
+    /// ShooterAnimator watches this to fire the "ThrowSmoke" trigger on all clients.
+    /// Mirrors the jumpSequence / shootFireSequence pattern.
+    /// </summary>
+    public NetworkVariable<int> smokeThrowSequence = new(0,
         NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Owner);
 
     public NetworkVariable<int> equippedWeaponIndex = new(0,
@@ -142,9 +147,6 @@ public class PlayerStats : NetworkBehaviour
     /// <summary>
     /// Damage with full kill attribution — always prefer this from weapons.
     /// </summary>
-    /// <param name="damage">Raw damage amount (server-side).</param>
-    /// <param name="killerId">OwnerClientId of the shooter.</param>
-    /// <param name="weaponName">Weapon display name, e.g. "Rifle".</param>
     public void TakeDamageFrom(float damage, ulong killerId, string weaponName)
     {
         if (!IsServer || isDead.Value) return;
@@ -152,7 +154,6 @@ public class PlayerStats : NetworkBehaviour
         if (currentHP.Value <= 0f) DieServer(killerId, weaponName);
     }
 
-    // Called server-side only.
     private void DieServer(ulong killerId, string weaponName)
     {
         isDead.Value = true;
@@ -185,10 +186,6 @@ public class PlayerStats : NetworkBehaviour
 
     public bool IsDead() => isDead.Value;
 
-    /// <summary>
-    /// Human-readable display label used in kill feed entries.
-    /// Returns e.g. "[TeamA] Shooter". Extend once you have real player names.
-    /// </summary>
     public string GetDisplayName()
     {
         string t = team.Value == TeamID.TeamA ? "TeamA" : "TeamB";

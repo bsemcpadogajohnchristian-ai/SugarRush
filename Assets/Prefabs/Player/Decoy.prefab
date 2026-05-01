@@ -49,7 +49,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d5a57f767e5e46a458fc5d3c628d0cbb, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Unity.Netcode.Runtime::Unity.Netcode.NetworkObject
-  GlobalObjectIdHash: 3449608107
+  GlobalObjectIdHash: 3499175075
   InScenePlacedSourceGlobalObjectIdHash: 0
   DeferredDespawnTick: 0
   Ownership: 1
@@ -78,6 +78,8 @@ MonoBehaviour:
   lifetime: 5
   gravity: -20
   maxHits: 5
+  smokePuffFX: {fileID: 525621754840262508, guid: 19a8e9ced62942d4a92dd250804d9d91,
+    type: 3}
   syncedTeam:
     m_InternalValue: 0
   ownerTeam: 0

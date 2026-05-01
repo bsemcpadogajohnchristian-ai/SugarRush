@@ -1,20 +1,16 @@
-// HUDManager.cs — Sugar Rush (UPDATED: Smoke Grenade HUD)
+// HUDManager.cs — Sugar Rush
 //
-// ── WHAT CHANGED ──────────────────────────────────────────────────────────
-//   New Inspector fields (Collector section):
-//     smokeGrenadePanel   — root GameObject containing smoke UI elements
-//     smokeGrenadeFill    — Image (Filled type) for cooldown ring / bar
-//     smokeGrenadeTimerText — TMP label showing remaining seconds or "Ready!"
-//     smokeChargesText    — TMP label showing "x2" / "x1" / "x0"
-//     smokeOverlayPanel   — full-screen Image shown when the player is inside smoke
+// ── SMOKE GRENADE MIGRATION ───────────────────────────────────────────────────
+//   Smoke grenade HUD is now wired to ShooterController, not CollectorController.
 //
-//   ResetAndInitialize() wires CollectorController's new smoke events.
-//   Cleanup() properly unsubscribes them.
-//   New methods:
-//     UpdateSmokeCooldown(float)  — drives smokeGrenadeFill + smokeGrenadeTimerText
-//     UpdateSmokeCharges(int)     — drives smokeChargesText
-//     SetSmokeOverlay(bool)       — shows/hides the screen-space smoke overlay
-//                                   called by SmokeCloud via targeted RPC
+//   WHAT CHANGED:
+//     • Added _trackedShooterForSmoke (ShooterController) private field.
+//     • smokeGrenadePanel now shows for SHOOTER (isShooter == true), not Collector.
+//     • ResetAndInitialize() — in the isShooter branch, smoke events are wired
+//       from ShooterController instead of CollectorController.
+//     • ResetAndInitialize() — smoke event wiring REMOVED from the Collector branch.
+//     • Cleanup() — unsubscribes from _trackedShooterForSmoke and nulls it.
+//     • RefreshShooterAmmo() — smokeGrenadePanel shown (true) instead of hidden.
 
 using System.Collections;
 using UnityEngine;
@@ -50,10 +46,10 @@ public class HUDManager : MonoBehaviour
     public TextMeshProUGUI superSpeedTimerText;
     public TextMeshProUGUI decoyTimerText;
 
-    // ── NEW: Smoke Grenade UI ─────────────────────────────────────────────────
-    [Header("Smoke Grenade (Collector)")]
+    // ── Smoke Grenade UI — now shown for the SHOOTER ─────────────────────────
+    [Header("Smoke Grenade (Shooter)")]
     [Tooltip("Root GameObject that groups the smoke grenade HUD elements. " +
-             "Enable/disable this alongside abilityPanel.")]
+             "Shown when the local player is a Shooter.")]
     public GameObject      smokeGrenadePanel;
 
     [Tooltip("Image component with Image Type = Filled. Fill Amount drives the cooldown.")]
@@ -66,10 +62,7 @@ public class HUDManager : MonoBehaviour
     public TextMeshProUGUI smokeChargesText;
 
     [Header("Smoke Screen Overlay")]
-    [Tooltip("Full-screen Image (or CanvasGroup) shown when the local player is " +
-             "standing inside a smoke cloud. Set its alpha to about 0.55 in the " +
-             "Inspector so it tints the screen without fully obscuring vision. " +
-             "The Image color should be a dark grey/green smoke tint.")]
+    [Tooltip("Full-screen Image shown when the local player is inside a smoke cloud.")]
     public GameObject smokeOverlayPanel;
     // ─────────────────────────────────────────────────────────────────────────
 
@@ -88,9 +81,10 @@ public class HUDManager : MonoBehaviour
     private PlayerStats         _player;
     private WeaponBase          _trackedWeapon;
     private CollectorController _trackedCollector;
+    private ShooterController   _trackedShooterForSmoke;   // ← NEW
     private float               _superSpeedMax = 30f;
     private float               _decoyMax      = 20f;
-    private float               _smokeMax      = 25f;   // ← NEW: matches smokeGrenadeCooldown
+    private float               _smokeMax      = 25f;
 
     private void Awake()
     {
@@ -104,8 +98,8 @@ public class HUDManager : MonoBehaviour
         reloadText?.gameObject.SetActive(false);
         SetInventoryVisible(false);
 
-        // Smoke overlay starts hidden.
-        if (smokeOverlayPanel != null) smokeOverlayPanel.SetActive(false);  // ← NEW
+        if (smokeOverlayPanel   != null) smokeOverlayPanel.SetActive(false);
+        if (smokeGrenadePanel  != null) smokeGrenadePanel.SetActive(false);  // hide until role is confirmed
     }
 
     private void OnDestroy() { if (Instance == this) Instance = null; }
@@ -126,7 +120,7 @@ public class HUDManager : MonoBehaviour
         ammoPanel?.SetActive(isShooter);
         candyPanel?.SetActive(!isShooter);
         abilityPanel?.SetActive(!isShooter);
-        smokeGrenadePanel?.SetActive(!isShooter);   // ← NEW
+        smokeGrenadePanel?.SetActive(isShooter);   // ← CHANGED: was !isShooter
 
         if (isShooter)
         {
@@ -135,6 +129,20 @@ public class HUDManager : MonoBehaviour
             if (w != null) WireWeapon(w);
 
             if (inventoryUI != null && sc != null) inventoryUI.Initialize(sc);
+
+            // ── NEW: wire smoke events from ShooterController ─────────────────
+            if (sc != null)
+            {
+                _trackedShooterForSmoke = sc;
+                _smokeMax = sc.smokeGrenadeCooldown;
+
+                sc.onSmokeGrenadeCooldown.AddListener(UpdateSmokeCooldown);
+                sc.onSmokeChargesChanged.AddListener(UpdateSmokeCharges);
+
+                UpdateSmokeCooldown(0f);                    // show "Ready!" immediately
+                UpdateSmokeCharges(sc.smokeMaxCharges);     // show full charges
+            }
+            // ─────────────────────────────────────────────────────────────────
         }
         else
         {
@@ -144,20 +152,13 @@ public class HUDManager : MonoBehaviour
                 _trackedCollector = cc;
                 _superSpeedMax    = cc.superSpeedCooldown;
                 _decoyMax         = cc.decoyCooldown;
-                _smokeMax         = cc.smokeGrenadeCooldown;   // ← NEW
+                // NOTE: smokeGrenadeCooldown removed from CollectorController — no smoke wiring here.
 
                 cc.onCandyCountChanged.AddListener(UpdateCandyCount);
                 cc.onSuperSpeedCooldown.AddListener(UpdateSuperSpeedCD);
                 cc.onDecoyCooldown.AddListener(UpdateDecoyCD);
 
-                // ── NEW: wire smoke events ────────────────────────────────────
-                cc.onSmokeGrenadeCooldown.AddListener(UpdateSmokeCooldown);
-                cc.onSmokeChargesChanged.AddListener(UpdateSmokeCharges);
-                // ─────────────────────────────────────────────────────────────
-
                 UpdateCandyCount(0);
-                UpdateSmokeCooldown(0f);                       // ← NEW (show "Ready!")
-                UpdateSmokeCharges(cc.smokeMaxCharges);        // ← NEW (show full charges)
             }
         }
     }
@@ -270,7 +271,7 @@ public class HUDManager : MonoBehaviour
         ammoPanel?.SetActive(true);
         candyPanel?.SetActive(false);
         abilityPanel?.SetActive(false);
-        smokeGrenadePanel?.SetActive(false);   // ← NEW
+        smokeGrenadePanel?.SetActive(true);   // ← CHANGED: was false — shooter has smoke
     }
 
     // ── Cleanup ───────────────────────────────────────────────────────────────
@@ -296,14 +297,17 @@ public class HUDManager : MonoBehaviour
             _trackedCollector.onCandyCountChanged.RemoveListener(UpdateCandyCount);
             _trackedCollector.onSuperSpeedCooldown.RemoveListener(UpdateSuperSpeedCD);
             _trackedCollector.onDecoyCooldown.RemoveListener(UpdateDecoyCD);
-
-            // ── NEW: unsubscribe smoke events ─────────────────────────────────
-            _trackedCollector.onSmokeGrenadeCooldown.RemoveListener(UpdateSmokeCooldown);
-            _trackedCollector.onSmokeChargesChanged.RemoveListener(UpdateSmokeCharges);
-            // ─────────────────────────────────────────────────────────────────
-
             _trackedCollector = null;
         }
+
+        // ── NEW: unsubscribe smoke events from ShooterController ──────────────
+        if (_trackedShooterForSmoke != null)
+        {
+            _trackedShooterForSmoke.onSmokeGrenadeCooldown.RemoveListener(UpdateSmokeCooldown);
+            _trackedShooterForSmoke.onSmokeChargesChanged.RemoveListener(UpdateSmokeCharges);
+            _trackedShooterForSmoke = null;
+        }
+        // ─────────────────────────────────────────────────────────────────────
 
         NetworkGameManager ngm = NetworkGameManager.Instance;
         if (ngm != null)
@@ -364,9 +368,8 @@ public class HUDManager : MonoBehaviour
         if (decoyTimerText) decoyTimerText.text  = r > 0f ? $"{r:F1}s" : "Ready!";
     }
 
-    // ── NEW: Smoke grenade UI updates ─────────────────────────────────────────
+    // ── Smoke grenade UI (now wired to ShooterController) ─────────────────────
 
-    /// <summary>Called by CollectorController.onSmokeGrenadeCooldown.</summary>
     private void UpdateSmokeCooldown(float remaining)
     {
         if (smokeGrenadeFill)
@@ -376,17 +379,12 @@ public class HUDManager : MonoBehaviour
             smokeGrenadeTimerText.text = remaining > 0f ? $"{remaining:F1}s" : "Ready!";
     }
 
-    /// <summary>Called by CollectorController.onSmokeChargesChanged.</summary>
     private void UpdateSmokeCharges(int charges)
     {
         if (smokeChargesText)
             smokeChargesText.text = $"x{charges}";
     }
 
-    /// <summary>
-    /// Called by SmokeCloud (via targeted RPC) when the local player enters or
-    /// exits a smoke cloud. Activates the full-screen smoke overlay panel.
-    /// </summary>
     public void SetSmokeOverlay(bool isInside)
     {
         if (smokeOverlayPanel != null)
@@ -394,8 +392,6 @@ public class HUDManager : MonoBehaviour
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-
-    // ── Reload text ───────────────────────────────────────────────────────────
 
     private void ShowReloadText()
     {
@@ -408,8 +404,6 @@ public class HUDManager : MonoBehaviour
         if (reloadText) reloadText.gameObject.SetActive(false);
         if (ammoText)   ammoText.gameObject.SetActive(true);
     }
-
-    // ── Match result ──────────────────────────────────────────────────────────
 
     private void ShowWinner(TeamID w) =>
         ShowNotification(w == TeamID.TeamA ? "TEAM A WINS! 🍬" : "TEAM B WINS! 🍬", 5f);
@@ -430,8 +424,6 @@ public class HUDManager : MonoBehaviour
     {
         if (swapZonePrompt != null) swapZonePrompt.SetActive(show);
     }
-
-    // ── Weapon changed ────────────────────────────────────────────────────────
 
     public void NotifyWeaponChanged(int index)
     {
