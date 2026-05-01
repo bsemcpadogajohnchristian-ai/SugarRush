@@ -1,13 +1,23 @@
 // FPArmsAnimator.cs — Sugar Rush
 //
-// ── SMOKE GRENADE REMOVED ────────────────────────────────────────────────────
-//   Smoke grenade has been moved to the Shooter role.
-//   Removed from this file:
-//     • H_ThrowSmoke animator hash
-//     • OnEnable subscription to collectorController.onSmokeGrenadeFired
-//     • OnDisable unsubscription
-//     • OnSmokeGrenadeFired() callback
-//     • ResetState() trigger reset for H_ThrowSmoke
+// ── MAGNET ABILITY ADDED ──────────────────────────────────────────────────────
+//   • Added H_ActivateMagnet animator hash (trigger "ActivateMagnet").
+//   • Added H_IsMagnet animator hash (bool "IsMagnet") — stays true for the
+//     full duration so the FP arms can play a looping "magnet active" pose.
+//   • OnEnable subscribes to collectorController.onMagnetActivated (trigger)
+//     and collectorController.onMagnetActiveChanged (bool).
+//   • OnDisable unsubscribes both.
+//   • OnMagnetActivated() fires the ActivateMagnet trigger.
+//   • OnMagnetActiveChanged() sets the IsMagnet bool.
+//   • ResetState() clears the new trigger and resets the bool.
+//
+// ── ANIMATOR SETUP REQUIRED ───────────────────────────────────────────────────
+//   In your FP Collector Arms Animator Controller add:
+//     • Trigger parameter  "ActivateMagnet"  — transition from any state to a
+//       short activation animation, then back to locomotion.
+//     • Bool parameter     "IsMagnet"        — drive a separate layer or
+//       blendshape overlay showing the magnet aura while active.
+//   (Both parameters are optional — the script won't crash if they're absent.)
 //
 // Drives the FIRST-PERSON Collector arms Animator on the LOCAL OWNER only.
 // Attach to fpArms — the first-person collector arms root (child of CameraHolder).
@@ -34,11 +44,13 @@ public class FPArmsAnimator : MonoBehaviour
 
     // ── Animator parameter hashes ─────────────────────────────────────────────
 
-    private static readonly int H_Speed         = Animator.StringToHash("Speed");
-    private static readonly int H_Pickup        = Animator.StringToHash("Pickup");
-    private static readonly int H_DeployDecoy   = Animator.StringToHash("DeployDecoy");
-    private static readonly int H_ActivateSpeed = Animator.StringToHash("ActivateSpeed");
-    private static readonly int H_Jump          = Animator.StringToHash("Jump");
+    private static readonly int H_Speed          = Animator.StringToHash("Speed");
+    private static readonly int H_Pickup         = Animator.StringToHash("Pickup");
+    private static readonly int H_DeployDecoy    = Animator.StringToHash("DeployDecoy");
+    private static readonly int H_ActivateSpeed  = Animator.StringToHash("ActivateSpeed");
+    private static readonly int H_Jump           = Animator.StringToHash("Jump");
+    private static readonly int H_ActivateMagnet = Animator.StringToHash("ActivateMagnet"); // ← NEW trigger
+    private static readonly int H_IsMagnet       = Animator.StringToHash("IsMagnet");        // ← NEW bool
 
     // ── Runtime fields ────────────────────────────────────────────────────────
 
@@ -66,6 +78,8 @@ public class FPArmsAnimator : MonoBehaviour
         if (collectorController != null)
         {
             collectorController.onDecoyFired.AddListener(OnDecoyFired);
+            collectorController.onMagnetActivated.AddListener(OnMagnetActivated);         // ← NEW
+            collectorController.onMagnetActiveChanged.AddListener(OnMagnetActiveChanged); // ← NEW
             _lastCarriedCount = collectorController.GetCarriedCount();
         }
 
@@ -78,6 +92,8 @@ public class FPArmsAnimator : MonoBehaviour
         if (collectorController != null)
         {
             collectorController.onDecoyFired.RemoveListener(OnDecoyFired);
+            collectorController.onMagnetActivated.RemoveListener(OnMagnetActivated);         // ← NEW
+            collectorController.onMagnetActiveChanged.RemoveListener(OnMagnetActiveChanged); // ← NEW
         }
     }
 
@@ -147,6 +163,27 @@ public class FPArmsAnimator : MonoBehaviour
         _anim.SetTrigger(H_DeployDecoy);
     }
 
+    // ── NEW: Magnet callbacks ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// Fires the one-shot "ActivateMagnet" trigger the moment the player
+    /// presses R. Plays the activation animation (e.g. arms raise, magnet gleam).
+    /// </summary>
+    private void OnMagnetActivated()
+    {
+        _anim.ResetTrigger(H_ActivateMagnet);
+        _anim.SetTrigger(H_ActivateMagnet);
+    }
+
+    /// <summary>
+    /// Drives the "IsMagnet" bool so a looping layer or overlay animation can
+    /// play for the full duration the magnet is active.
+    /// </summary>
+    private void OnMagnetActiveChanged(bool isActive)
+    {
+        _anim.SetBool(H_IsMagnet, isActive);
+    }
+
     // ── ResetState ────────────────────────────────────────────────────────────
 
     public void ResetState()
@@ -161,6 +198,8 @@ public class FPArmsAnimator : MonoBehaviour
         _anim.ResetTrigger(H_DeployDecoy);
         _anim.ResetTrigger(H_ActivateSpeed);
         _anim.ResetTrigger(H_Jump);
+        _anim.ResetTrigger(H_ActivateMagnet);  // ← NEW
+        _anim.SetBool(H_IsMagnet, false);       // ← NEW
         _anim.SetFloat(H_Speed, 0f);
     }
 }

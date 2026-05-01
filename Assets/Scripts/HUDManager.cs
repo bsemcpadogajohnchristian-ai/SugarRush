@@ -1,16 +1,22 @@
 // HUDManager.cs — Sugar Rush
 //
-// ── SMOKE GRENADE MIGRATION ───────────────────────────────────────────────────
-//   Smoke grenade HUD is now wired to ShooterController, not CollectorController.
+// ── MAGNET ABILITY ADDED ───────────────────────────────────────────────────────
+//   New Collector HUD section for the candy magnet (R key ability).
 //
 //   WHAT CHANGED:
-//     • Added _trackedShooterForSmoke (ShooterController) private field.
-//     • smokeGrenadePanel now shows for SHOOTER (isShooter == true), not Collector.
-//     • ResetAndInitialize() — in the isShooter branch, smoke events are wired
-//       from ShooterController instead of CollectorController.
-//     • ResetAndInitialize() — smoke event wiring REMOVED from the Collector branch.
-//     • Cleanup() — unsubscribes from _trackedShooterForSmoke and nulls it.
-//     • RefreshShooterAmmo() — smokeGrenadePanel shown (true) instead of hidden.
+//     • New [Header("Magnet (Collector)")] Inspector fields:
+//         magnetPanel          — root GameObject shown only for Collectors
+//         magnetFill           — Image (Type = Filled) driven by cooldown
+//         magnetTimerText      — TMP label: "X.Xs" or "Ready!"
+//         magnetActiveIndicator — GameObject shown while magnet is running
+//     • _magnetMax             — private float caching magnetCooldown value
+//     • ResetAndInitialize()   — wires cc.onMagnetCooldown + cc.onMagnetActiveChanged
+//                                 in the Collector branch; also calls initial
+//                                 UpdateMagnetCD(0f) so the label shows "Ready!".
+//     • Cleanup()              — unsubscribes both magnet events, hides indicator.
+//     • UpdateMagnetCD()       — fills the cooldown image + updates label.
+//     • UpdateMagnetActive()   — shows/hides the active indicator.
+//     All other logic is identical to the original.
 
 using System.Collections;
 using UnityEngine;
@@ -46,7 +52,24 @@ public class HUDManager : MonoBehaviour
     public TextMeshProUGUI superSpeedTimerText;
     public TextMeshProUGUI decoyTimerText;
 
-    // ── Smoke Grenade UI — now shown for the SHOOTER ─────────────────────────
+    // ── Magnet (Collector) ────────────────────────────────────────────────────
+    [Header("Magnet (Collector)")]
+    [Tooltip("Root GameObject that groups all magnet HUD elements. " +
+             "Shown only for the Collector role.")]
+    public GameObject      magnetPanel;
+
+    [Tooltip("Image component with Image Type = Filled. " +
+             "Fill Amount is driven by the cooldown (1 = cooling down, 0 = ready).")]
+    public Image           magnetFill;
+
+    [Tooltip("TMP label: shows remaining cooldown seconds or 'Ready!' when available.")]
+    public TextMeshProUGUI magnetTimerText;
+
+    [Tooltip("GameObject shown (activated) while the magnet is actively pulling candy. " +
+             "Hide it by default — this script shows/hides it at runtime.")]
+    public GameObject      magnetActiveIndicator;
+    // ─────────────────────────────────────────────────────────────────────────
+
     [Header("Smoke Grenade (Shooter)")]
     [Tooltip("Root GameObject that groups the smoke grenade HUD elements. " +
              "Shown when the local player is a Shooter.")]
@@ -64,7 +87,6 @@ public class HUDManager : MonoBehaviour
     [Header("Smoke Screen Overlay")]
     [Tooltip("Full-screen Image shown when the local player is inside a smoke cloud.")]
     public GameObject smokeOverlayPanel;
-    // ─────────────────────────────────────────────────────────────────────────
 
     [Header("Notifications")]
     public TextMeshProUGUI notificationText;
@@ -81,10 +103,11 @@ public class HUDManager : MonoBehaviour
     private PlayerStats         _player;
     private WeaponBase          _trackedWeapon;
     private CollectorController _trackedCollector;
-    private ShooterController   _trackedShooterForSmoke;   // ← NEW
+    private ShooterController   _trackedShooterForSmoke;
     private float               _superSpeedMax = 30f;
     private float               _decoyMax      = 20f;
     private float               _smokeMax      = 25f;
+    private float               _magnetMax     = 25f;   // ← NEW
 
     private void Awake()
     {
@@ -99,7 +122,9 @@ public class HUDManager : MonoBehaviour
         SetInventoryVisible(false);
 
         if (smokeOverlayPanel   != null) smokeOverlayPanel.SetActive(false);
-        if (smokeGrenadePanel  != null) smokeGrenadePanel.SetActive(false);  // hide until role is confirmed
+        if (smokeGrenadePanel   != null) smokeGrenadePanel.SetActive(false);
+        if (magnetPanel         != null) magnetPanel.SetActive(false);          // ← NEW
+        if (magnetActiveIndicator != null) magnetActiveIndicator.SetActive(false); // ← NEW
     }
 
     private void OnDestroy() { if (Instance == this) Instance = null; }
@@ -120,7 +145,8 @@ public class HUDManager : MonoBehaviour
         ammoPanel?.SetActive(isShooter);
         candyPanel?.SetActive(!isShooter);
         abilityPanel?.SetActive(!isShooter);
-        smokeGrenadePanel?.SetActive(isShooter);   // ← CHANGED: was !isShooter
+        magnetPanel?.SetActive(!isShooter);        // ← NEW: show magnet panel for Collector
+        smokeGrenadePanel?.SetActive(isShooter);
 
         if (isShooter)
         {
@@ -130,7 +156,6 @@ public class HUDManager : MonoBehaviour
 
             if (inventoryUI != null && sc != null) inventoryUI.Initialize(sc);
 
-            // ── NEW: wire smoke events from ShooterController ─────────────────
             if (sc != null)
             {
                 _trackedShooterForSmoke = sc;
@@ -139,10 +164,9 @@ public class HUDManager : MonoBehaviour
                 sc.onSmokeGrenadeCooldown.AddListener(UpdateSmokeCooldown);
                 sc.onSmokeChargesChanged.AddListener(UpdateSmokeCharges);
 
-                UpdateSmokeCooldown(0f);                    // show "Ready!" immediately
-                UpdateSmokeCharges(sc.smokeMaxCharges);     // show full charges
+                UpdateSmokeCooldown(0f);
+                UpdateSmokeCharges(sc.smokeMaxCharges);
             }
-            // ─────────────────────────────────────────────────────────────────
         }
         else
         {
@@ -152,13 +176,20 @@ public class HUDManager : MonoBehaviour
                 _trackedCollector = cc;
                 _superSpeedMax    = cc.superSpeedCooldown;
                 _decoyMax         = cc.decoyCooldown;
-                // NOTE: smokeGrenadeCooldown removed from CollectorController — no smoke wiring here.
+                _magnetMax        = cc.magnetCooldown;    // ← NEW
 
                 cc.onCandyCountChanged.AddListener(UpdateCandyCount);
                 cc.onSuperSpeedCooldown.AddListener(UpdateSuperSpeedCD);
                 cc.onDecoyCooldown.AddListener(UpdateDecoyCD);
 
+                // ── NEW: wire magnet events ───────────────────────────────────
+                cc.onMagnetCooldown.AddListener(UpdateMagnetCD);
+                cc.onMagnetActiveChanged.AddListener(UpdateMagnetActive);
+
                 UpdateCandyCount(0);
+                UpdateMagnetCD(0f);          // show "Ready!" immediately
+                UpdateMagnetActive(false);   // hide indicator
+                // ─────────────────────────────────────────────────────────────
             }
         }
     }
@@ -271,7 +302,8 @@ public class HUDManager : MonoBehaviour
         ammoPanel?.SetActive(true);
         candyPanel?.SetActive(false);
         abilityPanel?.SetActive(false);
-        smokeGrenadePanel?.SetActive(true);   // ← CHANGED: was false — shooter has smoke
+        magnetPanel?.SetActive(false);     // ← NEW: hide magnet for shooters
+        smokeGrenadePanel?.SetActive(true);
     }
 
     // ── Cleanup ───────────────────────────────────────────────────────────────
@@ -297,17 +329,22 @@ public class HUDManager : MonoBehaviour
             _trackedCollector.onCandyCountChanged.RemoveListener(UpdateCandyCount);
             _trackedCollector.onSuperSpeedCooldown.RemoveListener(UpdateSuperSpeedCD);
             _trackedCollector.onDecoyCooldown.RemoveListener(UpdateDecoyCD);
+
+            // ── NEW: unsubscribe magnet events ────────────────────────────────
+            _trackedCollector.onMagnetCooldown.RemoveListener(UpdateMagnetCD);
+            _trackedCollector.onMagnetActiveChanged.RemoveListener(UpdateMagnetActive);
+            if (magnetActiveIndicator != null) magnetActiveIndicator.SetActive(false);
+            // ─────────────────────────────────────────────────────────────────
+
             _trackedCollector = null;
         }
 
-        // ── NEW: unsubscribe smoke events from ShooterController ──────────────
         if (_trackedShooterForSmoke != null)
         {
             _trackedShooterForSmoke.onSmokeGrenadeCooldown.RemoveListener(UpdateSmokeCooldown);
             _trackedShooterForSmoke.onSmokeChargesChanged.RemoveListener(UpdateSmokeCharges);
             _trackedShooterForSmoke = null;
         }
-        // ─────────────────────────────────────────────────────────────────────
 
         NetworkGameManager ngm = NetworkGameManager.Instance;
         if (ngm != null)
@@ -368,7 +405,32 @@ public class HUDManager : MonoBehaviour
         if (decoyTimerText) decoyTimerText.text  = r > 0f ? $"{r:F1}s" : "Ready!";
     }
 
-    // ── Smoke grenade UI (now wired to ShooterController) ─────────────────────
+    // ── Magnet HUD ─────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Called by CollectorController.onMagnetCooldown every frame during countdown.
+    /// remaining == 0 signals "Ready!".
+    /// </summary>
+    private void UpdateMagnetCD(float remaining)
+    {
+        if (magnetFill)
+            magnetFill.fillAmount = _magnetMax > 0f ? remaining / _magnetMax : 0f;
+
+        if (magnetTimerText)
+            magnetTimerText.text = remaining > 0f ? $"{remaining:F1}s" : "Ready!";
+    }
+
+    /// <summary>
+    /// Called by CollectorController.onMagnetActiveChanged when the magnet
+    /// starts or stops. Shows/hides the active indicator.
+    /// </summary>
+    private void UpdateMagnetActive(bool isActive)
+    {
+        if (magnetActiveIndicator != null)
+            magnetActiveIndicator.SetActive(isActive);
+    }
+
+    // ── Smoke grenade UI ──────────────────────────────────────────────────────
 
     private void UpdateSmokeCooldown(float remaining)
     {

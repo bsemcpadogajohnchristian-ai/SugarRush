@@ -1,17 +1,24 @@
 // CollectorController.cs — Sugar Rush
 //
-// ── SMOKE GRENADE REMOVED ────────────────────────────────────────────────────
-//   The smoke grenade ability has been moved to ShooterController.
-//   All smoke-related fields, events, private state, and methods have been
-//   deleted from this file:
-//     • smokeGrenadePrefab, playerCamera, smokeThrowForce, smokeThrowArc,
-//       smokeMaxCharges, smokeGrenadeCooldown (Inspector fields)
-//     • onSmokeGrenadeCooldown, onSmokeChargesChanged, onSmokeGrenadeFired (events)
-//     • _smokeCharges, _smokeTimer (private state)
-//     • HandleSmokeGrenade() (Update sub-method)
-//     • ThrowSmokeGrenadeRpc() (ServerRpc)
-//     • Smoke timer tick in TickCooldowns()
-//     • playerCamera auto-find in Awake()
+// ── MAGNET ABILITY ADDED ──────────────────────────────────────────────────────
+//   New ability: press R to activate a candy magnet for magnetDuration seconds.
+//   While active, the nearest on-ground candy within magnetRadius is auto-picked
+//   up every magnetPickupRate seconds (up to maxCarryCapacity).
+//   After the duration expires, a magnetCooldown countdown begins.
+//
+//   NEW FIELDS:
+//     • magnetRadius, magnetDuration, magnetCooldown, magnetPickupRate (Inspector)
+//     • onMagnetCooldown   UnityEvent<float>  — drives HUD cooldown fill
+//     • onMagnetActiveChanged UnityEvent<bool> — drives HUD active indicator
+//     • onMagnetActivated  UnityEvent          — fires animation trigger (FP + 3P)
+//     • magnetActive       NetworkVariable<bool> — replicated for 3P animator
+//     • _magnetCooldownTimer, _magnetActive, _magnetPickupTimer (private state)
+//
+//   NEW METHODS:
+//     • HandleMagnet()         — reads R key, starts coroutine
+//     • MagnetRoutine()        — coroutine: active duration then cooldown flag
+//     • TryMagnetPickup()      — finds nearest candy in range, calls PickupCandyRpc
+//     • TickCooldowns() gains  — magnet cooldown tick + charge restore
 
 using System.Collections;
 using System.Collections.Generic;
@@ -38,6 +45,17 @@ public class CollectorController : NetworkBehaviour
     public float      decoyWindowDuration = 5f;
     public int        decoyMaxCharges     = 2;
 
+    // ── Magnet ────────────────────────────────────────────────────────────────
+    [Header("Magnet")]
+    [Tooltip("Auto-pickup radius while the magnet is active (metres).")]
+    public float magnetRadius     = 8f;
+    [Tooltip("How long the magnet stays active after pressing R (seconds).")]
+    public float magnetDuration   = 6f;
+    [Tooltip("Cooldown before R can be pressed again (seconds).")]
+    public float magnetCooldown   = 25f;
+    [Tooltip("Seconds between each automatic candy pickup while magnet is active.")]
+    public float magnetPickupRate = 0.25f;
+
     [Header("HUD events")]
     public UnityEvent<int>   onCandyCountChanged   = new();
     public UnityEvent<float> onSuperSpeedCooldown  = new();
@@ -46,11 +64,30 @@ public class CollectorController : NetworkBehaviour
     public UnityEvent<float> onDecoyWindow         = new();
     public UnityEvent        onDecoyFired          = new();
 
+    // ── Magnet HUD / animation events ─────────────────────────────────────────
+    /// <summary>Remaining cooldown seconds — 0 when ready. Drives HUD fill.</summary>
+    public UnityEvent<float> onMagnetCooldown      = new();
+    /// <summary>True while the magnet is actively pulling candy.</summary>
+    public UnityEvent<bool>  onMagnetActiveChanged = new();
+    /// <summary>Fires once on activation — triggers FP + 3P animations.</summary>
+    public UnityEvent        onMagnetActivated     = new();
+
+    // ── Network variables ─────────────────────────────────────────────────────
+
     public NetworkVariable<int> carriedCount = new(0,
         NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
 
     public NetworkVariable<bool> superSpeedActive = new(false,
         NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Owner);
+
+    /// <summary>
+    /// Replicated so CollectorAnimator on remote clients can drive the 3P
+    /// magnet animation, mirroring the superSpeedActive pattern.
+    /// </summary>
+    public NetworkVariable<bool> magnetActive = new(false,
+        NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Owner);
+
+    // ── Private state ─────────────────────────────────────────────────────────
 
     private PlayerController _pc;
     private PlayerStats      _stats;
@@ -63,7 +100,14 @@ public class CollectorController : NetworkBehaviour
     private bool  _superSpeedActive;
     private float _currentPenalty = 1f;
 
+    // Magnet
+    private float _magnetCooldownTimer;
+    private bool  _magnetActive;
+    private float _magnetPickupTimer;
+
     private readonly List<Candy> _carriedCandies = new();
+
+    // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     private void Awake()
     {
@@ -92,10 +136,11 @@ public class CollectorController : NetworkBehaviour
         HandlePickup();
         HandleSuperSpeed();
         HandleDecoy();
+        HandleMagnet();
         TickCooldowns();
     }
 
-    // ── Pickup ────────────────────────────────────────────────────────────────
+    // ── Manual Pickup ─────────────────────────────────────────────────────────
 
     private void HandlePickup()
     {
@@ -274,6 +319,78 @@ public class CollectorController : NetworkBehaviour
         return fromPos;
     }
 
+    // ── Magnet ────────────────────────────────────────────────────────────────
+
+    private void HandleMagnet()
+    {
+        // Activate on R press when ready and not already active.
+        if (Input.GetKeyDown(KeyCode.R) && !_magnetActive && _magnetCooldownTimer <= 0f)
+            StartCoroutine(MagnetRoutine());
+
+        // Tick the auto-pickup timer while magnet is running.
+        if (_magnetActive)
+        {
+            _magnetPickupTimer -= Time.deltaTime;
+            if (_magnetPickupTimer <= 0f)
+            {
+                _magnetPickupTimer = magnetPickupRate;
+                TryMagnetPickup();
+            }
+        }
+    }
+
+    private IEnumerator MagnetRoutine()
+    {
+        // ── Activate ──────────────────────────────────────────────────────────
+        _magnetActive         = true;
+        magnetActive.Value    = true;          // replicated → 3P animator
+        _magnetPickupTimer    = 0f;            // fire immediately on first frame
+        onMagnetActiveChanged?.Invoke(true);
+        onMagnetActivated?.Invoke();           // FP + 3P animation trigger
+
+        yield return new WaitForSeconds(magnetDuration);
+
+        // ── Deactivate ────────────────────────────────────────────────────────
+        _magnetActive         = false;
+        magnetActive.Value    = false;
+        onMagnetActiveChanged?.Invoke(false);
+        _magnetCooldownTimer  = magnetCooldown;
+    }
+
+    /// <summary>
+    /// Finds the nearest on-ground candy inside magnetRadius and requests a pickup.
+    /// Called every magnetPickupRate seconds while the magnet is active.
+    /// </summary>
+    private void TryMagnetPickup()
+    {
+        if (carriedCount.Value >= maxCarryCapacity) return;
+
+        Collider[] hits = Physics.OverlapSphere(transform.position, magnetRadius, candyLayer);
+
+        // Find nearest on-ground candy.
+        NetworkObject best      = null;
+        float         bestDist  = float.MaxValue;
+
+        foreach (Collider hit in hits)
+        {
+            Candy candy = hit.GetComponent<Candy>();
+            if (candy == null || !candy.IsOnGround()) continue;
+
+            NetworkObject no   = hit.GetComponent<NetworkObject>();
+            if (no == null) continue;
+
+            float dist = Vector3.Distance(transform.position, hit.transform.position);
+            if (dist < bestDist)
+            {
+                bestDist = dist;
+                best     = no;
+            }
+        }
+
+        if (best != null)
+            PickupCandyRpc(best.NetworkObjectId);
+    }
+
     // ── Cooldown ticks ────────────────────────────────────────────────────────
 
     private void TickCooldowns()
@@ -311,16 +428,46 @@ public class CollectorController : NetworkBehaviour
                 onDecoyChargesChanged?.Invoke(_decoyCharges);
             }
         }
+
+        // ── Magnet cooldown ───────────────────────────────────────────────────
+        if (_magnetCooldownTimer > 0f)
+        {
+            _magnetCooldownTimer -= Time.deltaTime;
+            onMagnetCooldown?.Invoke(Mathf.Max(_magnetCooldownTimer, 0f));
+
+            if (_magnetCooldownTimer <= 0f)
+            {
+                _magnetCooldownTimer = 0f;
+                onMagnetCooldown?.Invoke(0f);   // signal "Ready!"
+            }
+        }
     }
 
-    private void OnDied() { if (IsServer) DropAllCandiesServer(); }
+    // ── Death ─────────────────────────────────────────────────────────────────
+
+    private void OnDied()
+    {
+        if (IsServer) DropAllCandiesServer();
+    }
+
+    // ── Public helpers ────────────────────────────────────────────────────────
 
     public int  GetCarriedCount()    => carriedCount.Value;
     public bool IsSuperspeedActive() => _superSpeedActive;
+    public bool IsMagnetActive()     => _magnetActive;
+
+    // ── Gizmos ────────────────────────────────────────────────────────────────
 
     private void OnDrawGizmosSelected()
     {
+        // Manual pickup radius
         Gizmos.color = Color.yellow;
         Gizmos.DrawWireSphere(transform.position, pickupRadius);
+
+        // Magnet radius
+        Gizmos.color = _magnetActive
+            ? new Color(0.2f, 0.8f, 1f, 0.9f)
+            : new Color(0.2f, 0.8f, 1f, 0.3f);
+        Gizmos.DrawWireSphere(transform.position, magnetRadius);
     }
 }
