@@ -1,16 +1,22 @@
-// NetworkGameManager.cs — Sugar Rush  (UPDATED: Kill feed now includes team IDs)
+// NetworkGameManager.cs — Sugar Rush
 //
-// ── WHAT CHANGED FROM THE ORIGINAL ───────────────────────────────────────────
-//   OnPlayerKilled now resolves killerTeam / victimTeam and passes them into
-//   BroadcastKillRpc so KillFeedUI can apply the correct team background sprite
-//   to each player's name panel.
+// ── RPC SERIALIZATION FIX ─────────────────────────────────────────────────────
+//   BroadcastMatchResultsRpc previously passed string[], int[], float[] as
+//   separate parameters. NGO cannot serialize string[] in RPCs (it requires
+//   INetworkSerializeByMemcpy or INetworkSerializable).
 //
-//   BroadcastKillRpc signature updated:
-//     added  TeamID killerTeam, TeamID victimTeam
+//   FIX: CollectAndBroadcastResults() now packs everything into a
+//   MatchResultsPayload struct, serializes it to a single JSON string via
+//   JsonUtility, and passes ONLY that string to the RPC.
+//   MatchResultHolder.SetFromJson() deserializes it on every client.
 //
-//   KillFeedUI.AddEntry signature updated to match (see KillFeedUI.cs).
+//   Player names are stored as a pipe-delimited string inside the payload
+//   (e.g. "TeamA Shooter|TeamB Collector") to avoid any string[] in the struct.
 //
-//   All other match logic (timer, scoring, respawn, etc.) is unchanged.
+// ── OTHER CHANGES (from the previous version, unchanged here) ─────────────────
+//   FindPlayerByClientId() is public.
+//   OnPlayerKilled() increments killer's PlayerMatchStats.
+//   EndGame() / DrawRoutine() call CollectAndBroadcastResults() first.
 
 using System.Collections;
 using System.Collections.Generic;
@@ -115,10 +121,84 @@ public class NetworkGameManager : NetworkBehaviour
         else                                           StartCoroutine(DrawRoutine());
     }
 
-    private void EndGame(TeamID winner) { AnnounceWinnerRpc(winner); StartCoroutine(LoadResultAfterDelay()); }
+    private void EndGame(TeamID winner)
+    {
+        CollectAndBroadcastResults(isDraw: false, winner: winner);
+        AnnounceWinnerRpc(winner);
+        StartCoroutine(LoadResultAfterDelay());
+    }
 
-    private IEnumerator DrawRoutine()          { AnnouncDrawRpc(); yield return new WaitForSeconds(3f); LoadResultRpc(); }
+    private IEnumerator DrawRoutine()
+    {
+        CollectAndBroadcastResults(isDraw: true, winner: TeamID.TeamA);
+        AnnouncDrawRpc();
+        yield return new WaitForSeconds(3f);
+        LoadResultRpc();
+    }
+
     private IEnumerator LoadResultAfterDelay() { yield return new WaitForSeconds(3f); LoadResultRpc(); }
+
+    // ── Collect + broadcast (JSON transport) ─────────────────────────────────
+
+    private void CollectAndBroadcastResults(bool isDraw, TeamID winner)
+    {
+        if (!IsServer) return;
+
+        int count = _players.Count;
+
+        // Names are joined with '|' to avoid string[] in the serializable struct.
+        var nameList = new System.Text.StringBuilder();
+        var teams    = new int[count];
+        var roles    = new int[count];
+        var kills    = new int[count];
+        var damages  = new float[count];
+        var deaths   = new int[count];
+        var candies  = new int[count];
+
+        for (int i = 0; i < count; i++)
+        {
+            PlayerStats      ps  = _players[i];
+            PlayerMatchStats pms = ps != null ? ps.GetComponent<PlayerMatchStats>() : null;
+
+            if (i > 0) nameList.Append('|');
+            nameList.Append(ps?.GetDisplayName() ?? "Unknown");
+
+            teams[i]   = ps  != null ? (int)ps.team.Value   : 0;
+            roles[i]   = ps  != null ? (int)ps.role.Value   : 0;
+            kills[i]   = pms != null ? pms.kills.Value           : 0;
+            damages[i] = pms != null ? pms.damageDealt.Value      : 0f;
+            deaths[i]  = pms != null ? pms.deaths.Value           : 0;
+            candies[i] = pms != null ? pms.candiesDelivered.Value : 0;
+        }
+
+        var payload = new MatchResultsPayload
+        {
+            names      = nameList.ToString(),
+            teams      = teams,
+            roles      = roles,
+            kills      = kills,
+            damages    = damages,
+            deaths     = deaths,
+            candies    = candies,
+            isDraw     = isDraw,
+            winnerTeam = (int)winner,
+            scoreA     = scoreTeamA.Value,
+            scoreB     = scoreTeamB.Value,
+        };
+
+        string json = JsonUtility.ToJson(payload);
+        BroadcastMatchResultsRpc(json);
+    }
+
+    // ── RPC: single string param — fully supported by NGO ────────────────────
+
+    [Rpc(SendTo.ClientsAndHost)]
+    private void BroadcastMatchResultsRpc(string json)
+    {
+        MatchResultHolder.SetFromJson(json);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
 
     public void AddScore(TeamID team, int amount)
     {
@@ -168,29 +248,30 @@ public class NetworkGameManager : NetworkBehaviour
         return best;
     }
 
-    // ── KILL FEED ─────────────────────────────────────────────────────────────
+    // ── Kill feed ─────────────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Server-side entry point called by PlayerStats.DieServer().
-    /// Resolves display labels + team IDs, then broadcasts to all clients.
-    /// </summary>
     public void OnPlayerKilled(ulong killerId, string weaponName, PlayerStats victim)
     {
         if (!IsServer) return;
 
-        // ── Victim info ───────────────────────────────────────────────────────
+        // Increment killer's kill counter
+        if (killerId != 0)
+        {
+            PlayerStats killer = FindPlayerByClientId(killerId);
+            killer?.GetComponent<PlayerMatchStats>()?.AddKill();
+        }
+
         string victimLabel    = victim != null ? victim.GetDisplayName() : "Unknown";
         ulong  victimClientId = victim != null ? victim.OwnerClientId   : 0;
         TeamID victimTeam     = victim != null ? victim.team.Value       : TeamID.TeamA;
 
-        // ── Killer info ───────────────────────────────────────────────────────
         string killerLabel;
         TeamID killerTeam;
 
         if (killerId == 0)
         {
             killerLabel = "World";
-            killerTeam  = TeamID.TeamA; // arbitrary — World has no team
+            killerTeam  = TeamID.TeamA;
         }
         else
         {
@@ -206,17 +287,16 @@ public class NetworkGameManager : NetworkBehaviour
                          killerTeam, victimTeam);
     }
 
-    private PlayerStats FindPlayerByClientId(ulong clientId)
+    /// <summary>
+    /// Public so PlayerStats.TakeDamageFrom can look up the attacker.
+    /// </summary>
+    public PlayerStats FindPlayerByClientId(ulong clientId)
     {
         foreach (PlayerStats ps in _players)
             if (ps != null && ps.OwnerClientId == clientId) return ps;
         return null;
     }
 
-    /// <summary>
-    /// Runs on every client + host. Passes team IDs so KillFeedUI can apply
-    /// the correct background sprite to each player's name panel.
-    /// </summary>
     [Rpc(SendTo.ClientsAndHost)]
     private void BroadcastKillRpc(
         string killerLabel, string victimLabel, string weaponName,
@@ -228,8 +308,6 @@ public class NetworkGameManager : NetworkBehaviour
             killerClientId, victimClientId,
             killerTeam, victimTeam);
     }
-
-    // ── RPCs ──────────────────────────────────────────────────────────────────
 
     [Rpc(SendTo.ClientsAndHost)]
     private void AnnounceWinnerRpc(TeamID winner) => onMatchOver?.Invoke(winner);

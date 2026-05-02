@@ -115,6 +115,27 @@ public class LobbyManager : NetworkBehaviour
     }
 
     
+    /// <summary>
+    /// Called by ResultScreenManager before reloading GameScene for a rematch.
+    /// Resets _gameStarted so OnSceneLoaded will run SpawnAllPlayers again.
+    /// _clients and _clientSlot are kept intact — all players are still connected
+    /// in the same NGO session with the same slot assignments.
+    /// </summary>
+    public void PrepareRematch()
+    {
+        if (!IsServer) return;
+        _gameStarted = false;
+        _nextSlot    = 0;
+
+        // Re-assign slots from the existing connected client list so slot
+        // indices are consistent and no slot exceeds the valid range (0-3).
+        _clientSlot.Clear();
+        for (int i = 0; i < _clients.Count; i++)
+            _clientSlot[_clients[i]] = i;
+
+        Debug.Log("[Lobby] PrepareRematch — state reset, ready for OnSceneLoaded.");
+    }
+
     private void SpawnAllPlayers()
     {
         if (playerPrefab == null)

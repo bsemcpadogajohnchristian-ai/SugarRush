@@ -1,11 +1,15 @@
 // PlayerStats.cs — Sugar Rush
 // Unity 6.3 LTS + Netcode for GameObjects v2.1+
 //
-// ── SMOKE GRENADE MIGRATION ───────────────────────────────────────────────────
-//   Added smokeThrowSequence NetworkVariable (Owner-write, like jumpSequence).
-//   ShooterController increments it each time the owner throws a smoke grenade.
-//   ShooterAnimator watches it to fire the "ThrowSmoke" trigger on ALL clients
-//   so the 3P throw animation plays for everyone, not just the local owner.
+// ── RESULT SCREEN CHANGES ─────────────────────────────────────────────────────
+//   TakeDamageFrom  — before applying damage, finds the attacker's
+//                     PlayerMatchStats and calls AddDamage(damage).
+//   DieServer       — calls GetComponent<PlayerMatchStats>()?.AddDeath()
+//                     on the victim so the death counter is always accurate.
+//   Everything else is identical to the original.
+//
+// ── SMOKE GRENADE MIGRATION (previous change, unchanged) ─────────────────────
+//   smokeThrowSequence NetworkVariable added.
 
 using Unity.Netcode;
 using UnityEngine;
@@ -41,11 +45,6 @@ public class PlayerStats : NetworkBehaviour
     public NetworkVariable<int> shootFireSequence = new(0,
         NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Owner);
 
-    /// <summary>
-    /// Incremented by ShooterController each time the owner throws a smoke grenade.
-    /// ShooterAnimator watches this to fire the "ThrowSmoke" trigger on all clients.
-    /// Mirrors the jumpSequence / shootFireSequence pattern.
-    /// </summary>
     public NetworkVariable<int> smokeThrowSequence = new(0,
         NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Owner);
 
@@ -150,6 +149,15 @@ public class PlayerStats : NetworkBehaviour
     public void TakeDamageFrom(float damage, ulong killerId, string weaponName)
     {
         if (!IsServer || isDead.Value) return;
+
+        // ── RESULT SCREEN CHANGE: track damage dealt on the attacker ──────────
+        if (killerId != 0)
+        {
+            PlayerStats attacker = NetworkGameManager.Instance?.FindPlayerByClientId(killerId);
+            attacker?.GetComponent<PlayerMatchStats>()?.AddDamage(damage);
+        }
+        // ─────────────────────────────────────────────────────────────────────
+
         currentHP.Value = Mathf.Max(currentHP.Value - damage, 0f);
         if (currentHP.Value <= 0f) DieServer(killerId, weaponName);
     }
@@ -157,6 +165,11 @@ public class PlayerStats : NetworkBehaviour
     private void DieServer(ulong killerId, string weaponName)
     {
         isDead.Value = true;
+
+        // ── RESULT SCREEN CHANGE: increment victim's death counter ────────────
+        GetComponent<PlayerMatchStats>()?.AddDeath();
+        // ─────────────────────────────────────────────────────────────────────
+
         NetworkGameManager.Instance?.OnPlayerDied(this);
         NetworkGameManager.Instance?.OnPlayerKilled(killerId, weaponName, this);
     }

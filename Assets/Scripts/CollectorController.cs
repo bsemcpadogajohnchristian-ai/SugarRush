@@ -1,5 +1,9 @@
 // CollectorController.cs — Sugar Rush
 //
+// ── RESULT SCREEN CHANGE ──────────────────────────────────────────────────────
+//   DeliverCandiesServer() now calls PlayerMatchStats.AddCandies(count) so the
+//   Result Screen can show how many candies this Collector delivered.
+//
 // ── MAGNET ABILITY ADDED ──────────────────────────────────────────────────────
 //   New ability: press R to activate a candy magnet for magnetDuration seconds.
 //   While active, the nearest on-ground candy within magnetRadius is auto-picked
@@ -210,6 +214,7 @@ public class CollectorController : NetworkBehaviour
         _carriedCandies.Clear();
         carriedCount.Value = 0;
         NetworkGameManager.Instance?.AddScore(scoringTeam, count);
+        GetComponent<PlayerMatchStats>()?.AddCandies(count);   // ← RESULT SCREEN
     }
 
     // ── Candy count change ────────────────────────────────────────────────────
