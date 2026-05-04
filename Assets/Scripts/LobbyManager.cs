@@ -9,7 +9,7 @@ public class LobbyManager : NetworkBehaviour
     public static LobbyManager Instance { get; private set; }
 
     
-    private const int PLAYERS_NEEDED = 2;
+    private const int PLAYERS_NEEDED = 1;
 
     [Header("Setup")]
     public GameObject playerPrefab;
@@ -175,9 +175,15 @@ public class LobbyManager : NetworkBehaviour
                 continue;
             }
 
-            no.SpawnAsPlayerObject(clientId, true);
-
-            
+            // ── FIX v2: set NetworkVariables BEFORE SpawnAsPlayerObject ──────
+            // NGO includes the current NV values in the spawn message sent to
+            // clients. Setting them after the Spawn call means clients receive
+            // the spawn with default values (Shooter / TeamA) and a separate
+            // NV-correction message 1 frame later. AllyIndicator and other
+            // scripts that read role/team in their first frame of life then see
+            // stale defaults, causing icons to silently hide and never recover
+            // until the next polling window. Setting before Spawn ensures every
+            // client sees the correct role and team from the very first frame.
             PlayerStats ps = obj.GetComponent<PlayerStats>();
             if (ps != null)
             {
@@ -186,6 +192,8 @@ public class LobbyManager : NetworkBehaviour
                 ps.currentHP.Value = role == PlayerRole.Shooter
                     ? ps.shooterMaxHP : ps.collectorMaxHP;
             }
+
+            no.SpawnAsPlayerObject(clientId, true);
 
             
             PlayerController pc = obj.GetComponent<PlayerController>();

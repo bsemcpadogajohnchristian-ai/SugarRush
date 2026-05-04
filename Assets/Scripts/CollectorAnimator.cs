@@ -41,16 +41,8 @@ public class CollectorAnimator : MonoBehaviour
     [HideInInspector]
     public float crouchMaxSpeed = 3.0f;  // legacy — no longer read
 
-    [Header("Airborne detection")]
-    [Tooltip("Smoothed Y velocity (m/s) above which a non-owner is considered airborne.")]
-    public float airborneYThreshold = 0.6f;
-
-    [Tooltip("Seconds to hold IsAirborne = true after the signal drops (non-owners only).")]
-    public float airborneHoldTime = 0.05f;
-
     [Header("Velocity smoothing")]
     public float hSpeedSmoothFactor = 12f;
-    public float yVelSmoothFactor   = 20f;
     public float crouchSmoothFactor = 7f;
 
     [Header("Pick-up")]
@@ -64,7 +56,6 @@ public class CollectorAnimator : MonoBehaviour
     private static readonly int H_CrouchY      = Animator.StringToHash("CrouchMoveY");
     private static readonly int H_IsCrouching  = Animator.StringToHash("IsCrouching");
     private static readonly int H_IsSuperspeed = Animator.StringToHash("IsSuperspeed");
-    private static readonly int H_IsGrounded   = Animator.StringToHash("IsGrounded");
     private static readonly int H_IsPickingUp  = Animator.StringToHash("IsPickingUp");
     private static readonly int H_IsDead       = Animator.StringToHash("IsDead");
     private static readonly int H_Die          = Animator.StringToHash("Die");
@@ -79,10 +70,8 @@ public class CollectorAnimator : MonoBehaviour
 
     private float _smoothedSpeed;
     private float _smoothedHSpeed;
-    private float _smoothedYVel;
     private float _smoothedLocalX;
     private float _smoothedLocalZ;
-    private float _airborneBuffer;
     private float _pickupTimer;
     private int   _lastCarriedCount;
     private bool  _wasDead;
@@ -90,20 +79,8 @@ public class CollectorAnimator : MonoBehaviour
     private bool  _subscribedToRespawn;
     private int   _lastJumpSequence;
     private bool  _wasSuperspeed;
-    private bool  _wasAirborne;
-
-    private float       _jumpForceAirborneTimer;
-    private const float JUMP_FORCE_AIRBORNE_TIME = 0.15f;
-
-    private float _prevRawVelY;
-    private float _nonOwnerLandLatch;
-    private const float NON_OWNER_LAND_LATCH_TIME = 0.15f;
 
     private const float TELEPORT_THRESHOLD = 3f;
-
-    private float _ownerLocomotionAirborneBuffer;
-    private float _nonOwnerLocomotionAirborneBuffer;
-    private const float LOCOMOTION_AIRBORNE_BUFFER = 0.15f;
 
     private float       _movingOffDebounce;
     private const float MOVING_OFF_DEBOUNCE = 0.12f;
@@ -185,21 +162,13 @@ public class CollectorAnimator : MonoBehaviour
 
     private void ResetRuntimeState()
     {
-        _smoothedSpeed                    = 0f;
-        _smoothedHSpeed                   = 0f;
-        _smoothedYVel                     = 0f;
-        _airborneBuffer                   = 0f;
-        _smoothedLocalX                   = 0f;
-        _smoothedLocalZ                   = 0f;
-        _wasAirborne                      = false;
-        _wasSuperspeed                    = false;
-        _jumpForceAirborneTimer           = 0f;
-        _prevRawVelY                      = 0f;
-        _nonOwnerLandLatch                = 0f;
-        _ownerLocomotionAirborneBuffer    = 0f;
-        _nonOwnerLocomotionAirborneBuffer = 0f;
-        _movingOffDebounce                = 0f;
-        _sprintOffDebounce                = 0f;
+        _smoothedSpeed    = 0f;
+        _smoothedHSpeed   = 0f;
+        _smoothedLocalX   = 0f;
+        _smoothedLocalZ   = 0f;
+        _wasSuperspeed    = false;
+        _movingOffDebounce = 0f;
+        _sprintOffDebounce = 0f;
     }
 
     // ── Update ────────────────────────────────────────────────────────────────
@@ -244,7 +213,6 @@ public class CollectorAnimator : MonoBehaviour
             _anim.SetFloat(H_Speed,       0f);
             _anim.SetFloat(H_CrouchX,     0f);
             _anim.SetFloat(H_CrouchY,     0f);
-            _anim.SetBool(H_IsGrounded,   true);
             _anim.SetBool(H_IsCrouching,  false);
             _anim.SetBool(H_IsSuperspeed, false);
             _anim.SetBool(H_IsPickingUp,  false);
@@ -278,73 +246,13 @@ public class CollectorAnimator : MonoBehaviour
         bool isMagnet = collectorController != null && collectorController.magnetActive.Value;
         _anim.SetBool(H_IsMagnet, isMagnet);
 
-        // ── Jump sequence ─────────────────────────────────────────────────────
-        bool jumpJustFired = playerStats.jumpSequence.Value != _lastJumpSequence;
-
-        if (jumpJustFired)
-        {
-            _jumpForceAirborneTimer           = JUMP_FORCE_AIRBORNE_TIME;
-            _nonOwnerLandLatch                = 0f;
-            _ownerLocomotionAirborneBuffer    = 0f;
-            _nonOwnerLocomotionAirborneBuffer = 0f;
-        }
-        else if (_jumpForceAirborneTimer > 0f)
-        {
-            _jumpForceAirborneTimer -= UnityEngine.Time.deltaTime;
-        }
-
-        bool rawAirborne;
-        if (isOwner && playerController != null)
-        {
-            rawAirborne = !playerController.IsGrounded()
-                       || _jumpForceAirborneTimer > 0f;
-        }
-        else
-        {
-            _smoothedYVel = UnityEngine.Mathf.Lerp(_smoothedYVel, worldVel.y,
-                yVelSmoothFactor * UnityEngine.Time.deltaTime);
-
-            bool fastLanding = _prevRawVelY      < -airborneYThreshold
-                            && worldVel.y >= -airborneYThreshold * 0.4f;
-
-            if (fastLanding)
-                _nonOwnerLandLatch = NON_OWNER_LAND_LATCH_TIME;
-            else if (_nonOwnerLandLatch > 0f)
-                _nonOwnerLandLatch -= UnityEngine.Time.deltaTime;
-
-            _prevRawVelY = worldVel.y;
-
-            rawAirborne = (UnityEngine.Mathf.Abs(_smoothedYVel) > airborneYThreshold
-                       ||  _jumpForceAirborneTimer > 0f)
-                       && _nonOwnerLandLatch <= 0f;
-        }
-
-        bool isAirborne;
-        if (isOwner && playerController != null)
-        {
-            isAirborne = rawAirborne;
-        }
-        else
-        {
-            if (rawAirborne) _airborneBuffer = airborneHoldTime;
-            else if (_airborneBuffer > 0f) _airborneBuffer -= UnityEngine.Time.deltaTime;
-            isAirborne = rawAirborne || _airborneBuffer > 0f;
-        }
-
-        bool justLanded = _wasAirborne && !isAirborne;
-        _wasAirborne = isAirborne;
-        _anim.SetBool(H_IsGrounded, !isAirborne);
-
         // ── Jump trigger ──────────────────────────────────────────────────────
         int currentSeq = playerStats.jumpSequence.Value;
         if (currentSeq != _lastJumpSequence)
         {
             _lastJumpSequence = currentSeq;
-            if (!justLanded)
-            {
-                _anim.ResetTrigger(H_JumpTrigger);
-                _anim.SetTrigger(H_JumpTrigger);
-            }
+            _anim.ResetTrigger(H_JumpTrigger);
+            _anim.SetTrigger(H_JumpTrigger);
         }
 
         // ── Crouch ────────────────────────────────────────────────────────────
@@ -384,35 +292,9 @@ public class CollectorAnimator : MonoBehaviour
         }
 
         // ── Locomotion speed ──────────────────────────────────────────────────
-        bool isAirborneForLocomotion;
-        if (isOwner && playerController != null)
-        {
-            bool groundedForLocomotion = playerStats.isGroundedNV.Value
-                                      && _jumpForceAirborneTimer <= 0f;
-            if (groundedForLocomotion)
-                _ownerLocomotionAirborneBuffer = LOCOMOTION_AIRBORNE_BUFFER;
-            else if (_ownerLocomotionAirborneBuffer > 0f)
-                _ownerLocomotionAirborneBuffer -= UnityEngine.Time.deltaTime;
-
-            isAirborneForLocomotion = !groundedForLocomotion
-                                   && _ownerLocomotionAirborneBuffer <= 0f;
-        }
-        else
-        {
-            bool groundedForLocomotion = playerStats.isGroundedNV.Value
-                                      && _jumpForceAirborneTimer <= 0f;
-            if (groundedForLocomotion)
-                _nonOwnerLocomotionAirborneBuffer = LOCOMOTION_AIRBORNE_BUFFER;
-            else if (_nonOwnerLocomotionAirborneBuffer > 0f)
-                _nonOwnerLocomotionAirborneBuffer -= UnityEngine.Time.deltaTime;
-
-            isAirborneForLocomotion = isAirborne
-                                   && _nonOwnerLocomotionAirborneBuffer <= 0f;
-        }
-
         float targetSpeed;
 
-        if (isAirborneForLocomotion || isCrouching)
+        if (isCrouching)
         {
             targetSpeed = 0f;
         }

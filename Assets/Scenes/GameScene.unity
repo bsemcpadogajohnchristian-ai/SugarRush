@@ -24847,7 +24847,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::NetworkGameManager
   ShowTopMostFoldoutHeaderGroup: 1
-  matchDuration: 5
+  matchDuration: 300
   candiesNeededToWin: 20
   respawnDelay: 3
   scoreTeamA:

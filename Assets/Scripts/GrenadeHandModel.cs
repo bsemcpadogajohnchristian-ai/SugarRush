@@ -1,34 +1,31 @@
 // GrenadeHandModel.cs — Sugar Rush
 //
-// ── SMOKE GRENADE MIGRATION ───────────────────────────────────────────────────
-//   Rewired from CollectorController to ShooterController.
+// ── THROW-ONLY VISIBILITY ─────────────────────────────────────────────────────
+//   Previous behaviour: grenade mesh was visible in-hand whenever charges > 0,
+//   hidden during the throw arc, then restored.
 //
-//   WHAT CHANGED:
-//     • _collector field replaced with _shooter (ShooterController).
-//     • Awake() searches GetComponentInParent<ShooterController>().
-//     • OnEnable() / OnDisable() subscribe to shooter.onSmokeChargesChanged
-//       and shooter.onSmokeGrenadeFired instead of collector equivalents.
-//     • _lastKnownCharges initialised from shooter.smokeMaxCharges.
-//     • All logic (hide on throw, restore on charges, timer countdown) is
-//       identical to the original — only the event source changed.
+//   New behaviour: grenade mesh is ALWAYS hidden except during the brief
+//   throw animation window (hideOnThrowDuration seconds after OnThrown fires).
+//   This gives the illusion that the player "pulls out" the grenade, throws it,
+//   and it disappears — matching a typical FPS grenade throw feel.
 //
-// ── PREFAB SETUP ─────────────────────────────────────────────────────────────
-//   Move this GameObject from under the Collector FP arms rig to under the
-//   SHOOTER FP arms rig (fpShooterArms), specifically onto the right-hand bone:
-//     1. Inside fpShooterArms rig, find the right-hand bone (e.g. Hand_R).
-//     2. Create an empty child named "GrenadeInHand". Attach THIS script to it.
-//     3. Add a child named "Mesh" (copy the visual from your SmokeGrenade prefab,
-//        strip all physics/network components). Scale to taste (~0.5).
-//     4. Drag that "Mesh" child into the meshRoot field in the Inspector.
-//        If you leave meshRoot empty the script falls back to toggling all
-//        Renderer components found in the children of this GameObject.
-//     5. Set hideOnThrowDuration to roughly match your throw animation length.
-//     6. This GameObject should ALWAYS remain active — only the mesh inside
-//        it is shown or hidden.
+//   WHAT CHANGED vs the previous version:
+//     • OnEnable()         — mesh starts hidden (was: starts visible when charges > 0).
+//     • OnChargesChanged() — no longer shows the mesh when charges are restored;
+//                            it only updates _lastKnownCharges for internal tracking.
+//     • OnThrown()         — shows the mesh immediately (was: hid it). The existing
+//                            hide timer now runs to hide the mesh again after the
+//                            throw animation finishes, exactly as before.
+//     • Update()           — hide logic is unchanged; when _hideTimer expires the
+//                            mesh is hidden (was: shown if charges > 0).
 //
-// ── NOTES ────────────────────────────────────────────────────────────────────
-//   ShooterController is found via GetComponentInParent, so it will be found
-//   as long as this object is a descendant of the Shooter player root.
+//   No prefab changes required. Inspector fields are identical.
+//
+// ── PREFAB SETUP (unchanged) ─────────────────────────────────────────────────
+//   This GameObject sits under fpShooterArms on the right-hand bone (Hand_R).
+//   meshRoot  → child "Mesh" with the grenade visual (no physics/network components).
+//   hideOnThrowDuration → match your throw animation clip length (~0.5–0.8 s).
+//   This GameObject should ALWAYS remain active — only the mesh inside is toggled.
 
 using UnityEngine;
 
@@ -39,11 +36,11 @@ public class GrenadeHandModel : MonoBehaviour
              "If left empty, all Renderers in children will be toggled instead.")]
     public GameObject meshRoot;
 
-    [Tooltip("Seconds to hide the in-hand grenade after throwing. " +
+    [Tooltip("Seconds the in-hand grenade is VISIBLE after throwing. " +
              "Set this to roughly match your throw animation clip length (0.5–0.8 s).")]
     public float hideOnThrowDuration = 0.6f;
 
-    private ShooterController _shooter;   // ← WAS CollectorController
+    private ShooterController _shooter;
     private float             _hideTimer;
     private int               _lastKnownCharges;
 
@@ -51,7 +48,7 @@ public class GrenadeHandModel : MonoBehaviour
 
     private void Awake()
     {
-        _shooter = GetComponentInParent<ShooterController>();   // ← CHANGED
+        _shooter = GetComponentInParent<ShooterController>();
 
         if (_shooter == null)
             Debug.LogWarning("[GrenadeHandModel] Could not find ShooterController in parents. " +
@@ -62,20 +59,20 @@ public class GrenadeHandModel : MonoBehaviour
     {
         if (_shooter == null) return;
 
-        _shooter.onSmokeChargesChanged.AddListener(OnChargesChanged);   // ← CHANGED
-        _shooter.onSmokeGrenadeFired.AddListener(OnThrown);             // ← CHANGED
+        _shooter.onSmokeChargesChanged.AddListener(OnChargesChanged);
+        _shooter.onSmokeGrenadeFired.AddListener(OnThrown);
 
-        // Sync visual state immediately.
+        // ── CHANGED: start hidden — only visible during the throw animation ──
         _lastKnownCharges = _shooter.smokeMaxCharges;
-        SetMeshVisible(true);
+        SetMeshVisible(false);
     }
 
     private void OnDisable()
     {
         if (_shooter == null) return;
 
-        _shooter.onSmokeChargesChanged.RemoveListener(OnChargesChanged);   // ← CHANGED
-        _shooter.onSmokeGrenadeFired.RemoveListener(OnThrown);             // ← CHANGED
+        _shooter.onSmokeChargesChanged.RemoveListener(OnChargesChanged);
+        _shooter.onSmokeGrenadeFired.RemoveListener(OnThrown);
 
         _hideTimer = 0f;
     }
@@ -91,10 +88,8 @@ public class GrenadeHandModel : MonoBehaviour
         if (_hideTimer <= 0f)
         {
             _hideTimer = 0f;
-
-            // Restore visibility only if there are still charges left.
-            if (_lastKnownCharges > 0)
-                SetMeshVisible(true);
+            // ── CHANGED: always hide after the throw window — never restore ──
+            SetMeshVisible(false);
         }
     }
 
@@ -102,28 +97,18 @@ public class GrenadeHandModel : MonoBehaviour
 
     private void OnChargesChanged(int charges)
     {
+        // ── CHANGED: only track the count for internal use.
+        // Do NOT show the mesh here — it only appears during the throw window.
         _lastKnownCharges = charges;
-
-        if (charges <= 0)
-        {
-            // Out of charges — hide permanently until cooldown resets.
-            _hideTimer = 0f;
-            SetMeshVisible(false);
-        }
-        else if (_hideTimer <= 0f)
-        {
-            // Charges restored (cooldown finished) — show the grenade again.
-            SetMeshVisible(true);
-        }
-        // If hideTimer > 0 we're mid-throw animation; let Update() restore on finish.
     }
 
     private void OnThrown()
     {
-        // Hide the mesh during the throw arc.
-        // KEY: we hide the child mesh, NOT this GameObject, so Update()
-        // keeps running and the timer works correctly.
-        SetMeshVisible(false);
+        // ── CHANGED: SHOW the mesh when the throw fires so the player sees
+        // the grenade leave their hand, then hide it after hideOnThrowDuration.
+        if (_lastKnownCharges < 0) return; // safety: no charges at all, skip
+
+        SetMeshVisible(true);
         _hideTimer = hideOnThrowDuration;
     }
 

@@ -146,13 +146,18 @@ public class FPArmsAnimator : MonoBehaviour
         _superSpeedWas = isSuperspeed;
 
         // ── Jump ──────────────────────────────────────────────────────────────
+        UpdateJump();
+    }
+
+    // ── Jump ─────────────────────────────────────────────────────────────────
+
+    private void UpdateJump()
+    {
         int currentSeq = playerStats.jumpSequence.Value;
-        if (currentSeq != _lastJumpSequence)
-        {
-            _lastJumpSequence = currentSeq;
-            _anim.ResetTrigger(H_Jump);
-            _anim.SetTrigger(H_Jump);
-        }
+        if (currentSeq == _lastJumpSequence) return;
+        _lastJumpSequence = currentSeq;
+        _anim.ResetTrigger(H_Jump);
+        _anim.SetTrigger(H_Jump);
     }
 
     // ── Ability callbacks ─────────────────────────────────────────────────────
