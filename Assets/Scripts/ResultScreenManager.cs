@@ -1,29 +1,20 @@
 // ResultScreenManager.cs — Sugar Rush
 //
-// ── REMATCH + SCENE-LOAD FIX ──────────────────────────────────────────────────
+// ── STRIPPED VERSION ──────────────────────────────────────────────────────────
+//   Removed from this version:
+//     • bannerLeftBar / bannerRightBar   (banner accent bars)
+//     • subLabel                         (banner sub-label)
+//     • teamAAccentBar / teamBAccentBar  (team panel accent bars)
+//     • teamAHeaderLabel / teamBHeaderLabel (team panel header labels)
+//     • Entire MVP strip section         (all six mvp* labels + PopulateMVP())
 //
-//  BUG 1 — "Play Again / Main Menu didn't load the scene"
-//    Root cause: NetworkManager.Shutdown() is asynchronous. Calling
-//    SceneManager.LoadScene immediately after Shutdown() fires before NGO has
-//    finished tearing down, so the load either fails silently or the new scene
-//    inherits broken NGO state.
-//    Fix: ShutdownThenLoad() coroutine polls IsListening each frame and only
-//    loads the scene once NGO is fully stopped.
+//   Everything else (rematch / main-menu logic, score banner, team stats,
+//   win/lose graphics) is unchanged.
 //
-//  BUG 2 — "Play Again" is now "Rematch" (host-style, waits for players)
-//    The old Play Again called Shutdown → LoadScene just like Main Menu, so
-//    both players ended up on the lobby screen with no connection between them.
-//    Fix: Rematch does NOT shut down NGO. Instead:
-//      • The server calls LobbyManager.PrepareRematch() (resets _gameStarted so
-//        OnSceneLoaded fires again), then reloads GameScene via NGO's own
-//        SceneManager — all clients follow automatically.
-//      • Non-server clients disable their Rematch button and show "Waiting for
-//        host…" — the server drives the transition, clients just wait.
-//    This reuses ALL existing LobbyManager logic: OnSceneLoaded → SpawnAllPlayers
-//    → StartMatch. No duplicate code.
-//
-//  CURSOR FIX (carried over from previous version)
-//    Cursor is unlocked in Start() so buttons are clickable.
+// ── REMATCH + SCENE-LOAD FIX (unchanged) ─────────────────────────────────────
+//   ShutdownThenLoad() polls IsListening before loading so NGO tears down
+//   cleanly before the scene transition.
+//   Rematch reuses LobbyManager.PrepareRematch() — no NGO shutdown needed.
 
 using System.Collections;
 using Unity.Netcode;
@@ -53,19 +44,13 @@ public class ResultScreenManager : MonoBehaviour
     [Header("Banner — Result")]
     public RectTransform   bannerPanel;
     public TextMeshProUGUI resultLabel;
-
-    [Tooltip("No longer used — leave empty or remove from prefab.")]
-    public TextMeshProUGUI subLabel;
-
     public TextMeshProUGUI scoreLabel;
-    public Image           bannerLeftBar;
-    public Image           bannerRightBar;
+    // bannerLeftBar, bannerRightBar, subLabel — REMOVED
 
     // ── Team A Stats ──────────────────────────────────────────────────────────
     [Header("Team A Stats Panel")]
     public Image           teamAPanelBg;       // NOT tinted — your sprite shows as-is
-    public Image           teamAAccentBar;     // tinted C_A (blue strip)
-    public TextMeshProUGUI teamAHeaderLabel;
+    // teamAAccentBar, teamAHeaderLabel — REMOVED
 
     public TextMeshProUGUI teamAShooterName;
     public TextMeshProUGUI teamAShooterKills;
@@ -79,8 +64,7 @@ public class ResultScreenManager : MonoBehaviour
     // ── Team B Stats ──────────────────────────────────────────────────────────
     [Header("Team B Stats Panel")]
     public Image           teamBPanelBg;       // NOT tinted — your sprite shows as-is
-    public Image           teamBAccentBar;     // tinted C_B (red strip)
-    public TextMeshProUGUI teamBHeaderLabel;
+    // teamBAccentBar, teamBHeaderLabel — REMOVED
 
     public TextMeshProUGUI teamBShooterName;
     public TextMeshProUGUI teamBShooterKills;
@@ -91,14 +75,7 @@ public class ResultScreenManager : MonoBehaviour
     public TextMeshProUGUI teamBCollectorCandies;
     public TextMeshProUGUI teamBCollectorDeaths;
 
-    // ── MVP Strip ─────────────────────────────────────────────────────────────
-    [Header("MVP Strip")]
-    public TextMeshProUGUI mvpKillerName;
-    public TextMeshProUGUI mvpKillerStat;
-    public TextMeshProUGUI mvpCandyName;
-    public TextMeshProUGUI mvpCandyStat;
-    public TextMeshProUGUI mvpDamageName;
-    public TextMeshProUGUI mvpDamageStat;
+    // MVP Strip — REMOVED entirely
 
     // ── Buttons ───────────────────────────────────────────────────────────────
     [Header("Buttons")]
@@ -163,7 +140,7 @@ public class ResultScreenManager : MonoBehaviour
         PopulateBanner();
         PopulateTeam(TeamID.TeamA);
         PopulateTeam(TeamID.TeamB);
-        PopulateMVP();
+        // PopulateMVP() — REMOVED
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -195,7 +172,7 @@ public class ResultScreenManager : MonoBehaviour
             resultLabel.color = resultColor;
         }
 
-        // subLabel intentionally not written to.
+        // subLabel — REMOVED (no longer written to)
 
         if (scoreLabel != null)
         {
@@ -209,9 +186,7 @@ public class ResultScreenManager : MonoBehaviour
             scoreLabel.richText = true;
         }
 
-        Color accentColor = isDraw ? C_Draw : (aWins ? C_A : C_B);
-        if (bannerLeftBar  != null) bannerLeftBar.color  = accentColor;
-        if (bannerRightBar != null) bannerRightBar.color = accentColor;
+        // bannerLeftBar / bannerRightBar — REMOVED (no longer tinted)
 
         if (victoryGraphic != null) victoryGraphic.SetActive(!isDraw && aWins);
         if (defeatGraphic  != null) defeatGraphic.SetActive(!isDraw && !aWins);
@@ -224,20 +199,9 @@ public class ResultScreenManager : MonoBehaviour
 
     private void PopulateTeam(TeamID team)
     {
-        bool  isA       = team == TeamID.TeamA;
-        Color teamColor = isA ? C_A : C_B;
+        bool isA = team == TeamID.TeamA;
 
-        // Panel backgrounds are NOT tinted — your custom sprites display as-is.
-        if (isA)
-        {
-            if (teamAAccentBar   != null) teamAAccentBar.color  = teamColor;
-            if (teamAHeaderLabel != null) teamAHeaderLabel.text = "TEAM  A";
-        }
-        else
-        {
-            if (teamBAccentBar   != null) teamBAccentBar.color  = teamColor;
-            if (teamBHeaderLabel != null) teamBHeaderLabel.text = "TEAM  B";
-        }
+        // teamAAccentBar, teamAHeaderLabel, teamBAccentBar, teamBHeaderLabel — REMOVED
 
         MatchResultEntry shooter   = null;
         MatchResultEntry collector = null;
@@ -287,56 +251,16 @@ public class ResultScreenManager : MonoBehaviour
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  MVP STRIP
-    // ─────────────────────────────────────────────────────────────────────────
-
-    private void PopulateMVP()
-    {
-        int   bestKills   = 0;
-        float bestDmg     = 0f;
-        int   bestCandies = 0;
-        MatchResultEntry topKiller = null, topCandy = null, topDamage = null;
-
-        foreach (var e in MatchResultHolder.Results)
-        {
-            if (e.role == PlayerRole.Shooter)
-            {
-                if (e.kills       > bestKills) { bestKills = e.kills;       topKiller = e; }
-                if (e.damageDealt > bestDmg)   { bestDmg   = e.damageDealt; topDamage = e; }
-            }
-            else
-            {
-                if (e.candiesDelivered > bestCandies) { bestCandies = e.candiesDelivered; topCandy = e; }
-            }
-        }
-
-        SetTMP(mvpKillerName, topKiller != null ? CleanName(topKiller.displayName) : "—");
-        SetTMP(mvpKillerStat, topKiller != null ? $"Kills: {topKiller.kills}"      : "");
-
-        SetTMP(mvpCandyName,  topCandy  != null ? CleanName(topCandy.displayName)             : "—");
-        SetTMP(mvpCandyStat,  topCandy  != null ? $"Candies: {topCandy.candiesDelivered}"     : "");
-
-        SetTMP(mvpDamageName, topDamage != null ? CleanName(topDamage.displayName)            : "—");
-        SetTMP(mvpDamageStat, topDamage != null
-            ? $"Damage: {Mathf.RoundToInt(topDamage.damageDealt):N0}" : "");
-    }
+    // PopulateMVP() — REMOVED entirely
 
     // ─────────────────────────────────────────────────────────────────────────
     //  BUTTON CALLBACKS
     // ─────────────────────────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Rematch — server resets LobbyManager state then reloads GameScene via NGO.
-    /// All connected clients follow automatically. LobbyManager.OnSceneLoaded
-    /// fires on the server and handles SpawnAllPlayers + StartMatch as normal.
-    /// Clients stay connected — no shutdown, no reconnection required.
-    /// </summary>
     private void OnRematch()
     {
         if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsListening)
         {
-            // Fallback: connection was lost — go to lobby normally.
             SceneManager.LoadScene(lobbySceneName);
             return;
         }
@@ -346,19 +270,12 @@ public class ResultScreenManager : MonoBehaviour
         if (rematchButton      != null) rematchButton.interactable      = false;
         if (rematchStatusLabel != null) rematchStatusLabel.text         = "Loading…";
 
-        // Reset LobbyManager so it treats the next OnSceneLoaded as a fresh match.
         LobbyManager.Instance?.PrepareRematch();
 
-        // NGO reloads the scene for ALL clients simultaneously.
         NetworkManager.Singleton.SceneManager.LoadScene(
             gameSceneName, UnityEngine.SceneManagement.LoadSceneMode.Single);
     }
 
-    /// <summary>
-    /// Main Menu — shuts down NGO cleanly then loads lobby.
-    /// The coroutine waits until IsListening = false before loading, which
-    /// was the root cause of the "scene didn't load" bug.
-    /// </summary>
     private void OnMainMenu()
     {
         if (mainMenuButton != null) mainMenuButton.interactable = false;
@@ -371,8 +288,6 @@ public class ResultScreenManager : MonoBehaviour
         if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening)
         {
             NetworkManager.Singleton.Shutdown();
-
-            // Poll each frame until NGO has fully stopped.
             while (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening)
                 yield return null;
         }

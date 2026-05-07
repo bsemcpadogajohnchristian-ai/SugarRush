@@ -1,22 +1,31 @@
 // HUDManager.cs — Sugar Rush
 //
-// ── MAGNET ABILITY ADDED ───────────────────────────────────────────────────────
-//   New Collector HUD section for the candy magnet (R key ability).
+// ── ALL 3 SKILL SLOTS UNIFIED ─────────────────────────────────────────────────
+//   Magnet, Super Speed, and Decoy now all share the SAME abilityPanel.
+//   The old separate magnetPanel field has been removed — SkillSlot_Magnet
+//   is simply a child of AbilityPanel, exactly like SkillSlot_SuperSpeed and
+//   SkillSlot_Decoy. No extra show/hide logic is needed.
 //
-//   WHAT CHANGED:
-//     • New [Header("Magnet (Collector)")] Inspector fields:
-//         magnetPanel          — root GameObject shown only for Collectors
-//         magnetFill           — Image (Type = Filled) driven by cooldown
-//         magnetTimerText      — TMP label: "X.Xs" or "Ready!"
-//         magnetActiveIndicator — GameObject shown while magnet is running
-//     • _magnetMax             — private float caching magnetCooldown value
-//     • ResetAndInitialize()   — wires cc.onMagnetCooldown + cc.onMagnetActiveChanged
-//                                 in the Collector branch; also calls initial
-//                                 UpdateMagnetCD(0f) so the label shows "Ready!".
-//     • Cleanup()              — unsubscribes both magnet events, hides indicator.
-//     • UpdateMagnetCD()       — fills the cooldown image + updates label.
-//     • UpdateMagnetActive()   — shows/hides the active indicator.
-//     All other logic is identical to the original.
+//   WHAT CHANGED vs the previous version:
+//     • Removed [Header("Magnet (Collector)")] section and magnetPanel field.
+//     • magnetFill, magnetTimerText, magnetActiveIndicator moved into the
+//       unified [Header("Abilities (Collector)")] section.
+//     • Start() no longer calls magnetPanel.SetActive(false) separately.
+//     • ResetAndInitialize() no longer calls magnetPanel.SetActive(!isShooter).
+//     • Cleanup() no longer references magnetPanel.
+//     • All three skill bars (Magnet, SuperSpeed, Decoy) use identical visual
+//       rules driven by their Refresh*Bar() methods (unchanged):
+//
+//   SHARED VISUAL RULES (all three bars):
+//     ACTIVE / READY   → SkillReadyColor  (pink), fillAmount = 1.0, timer hidden
+//     ON COOLDOWN      → SkillCooldownColor (grey), fillAmount fills 0→1,
+//                        timer shows integer seconds remaining
+//
+// ── Inspector re-wiring required ─────────────────────────────────────────────
+//   In the Inspector, drag the three Image/TMP components that were previously
+//   assigned to the old "Magnet" header into the new "Abilities (Collector)"
+//   header fields: magnetFill, magnetTimerText, magnetActiveIndicator.
+//   Unassign anything that was in the old magnetPanel slot — it no longer exists.
 
 using System.Collections;
 using UnityEngine;
@@ -32,43 +41,70 @@ public class HUDManager : MonoBehaviour
     public TextMeshProUGUI teamBScoreText;
     public TextMeshProUGUI timerText;
 
-    [Header("Health")]
-    public Slider          healthBar;
+    // ── HEART HP DISPLAY ──────────────────────────────────────────────────────
+    [Header("Health — Heart Display")]
+    [Tooltip("The FILL heart Image. Must have:\n" +
+             "  • Image Type  = Filled\n" +
+             "  • Fill Method = Vertical\n" +
+             "  • Fill Origin = Bottom\n" +
+             "Its fillAmount (0–1) is driven by current HP / max HP.")]
+    public Image heartFillImage;
+
+    [Tooltip("The OUTLINE heart Image. Always visible — never changed by code.\n" +
+             "Stack it on top of heartFillImage in the hierarchy so the outline\n" +
+             "is always drawn over the fill.")]
+    public Image heartOutlineImage;
+
+    [Tooltip("TMP label that shows current HP, e.g. \"85\".\n" +
+             "Updated every time the player's HP changes.")]
     public TextMeshProUGUI healthText;
+
+    [Header("Health — Heart Sprites")]
+    public Sprite shooterHeartFill;
+    public Sprite shooterHeartOutline;
+    public Sprite collectorHeartFill;
+    public Sprite collectorHeartOutline;
+    // ─────────────────────────────────────────────────────────────────────────
 
     [Header("Ammo (Shooter)")]
     public GameObject      ammoPanel;
     public TextMeshProUGUI ammoText;
     public TextMeshProUGUI reloadText;
 
+    [Tooltip("Image that displays the current weapon's icon. " +
+             "Place it inside AmmoPanel, to the left of the ammo text.")]
+    public Image           weaponIconImage;
+
     [Header("Candy (Collector)")]
     public GameObject      candyPanel;
     public TextMeshProUGUI candyCountText;
 
-    [Header("Abilities (Collector)")]
+    // ── ALL THREE SKILL SLOTS live inside this one panel ─────────────────────
+    [Header("Abilities (Collector) — all three skill slots share this panel")]
+    [Tooltip("Root panel that contains SkillSlot_SuperSpeed, SkillSlot_Decoy, " +
+             "AND SkillSlot_Magnet as children. Shown for Collector, hidden for Shooter.")]
     public GameObject      abilityPanel;
+
+    // Super Speed
+    [Tooltip("Bar_Fill Image inside SkillSlot_SuperSpeed.")]
     public Image           superSpeedFill;
-    public Image           decoyFill;
+    [Tooltip("Skill_CD TMP label inside SkillSlot_SuperSpeed.")]
     public TextMeshProUGUI superSpeedTimerText;
+
+    // Decoy
+    [Tooltip("Bar_Fill Image inside SkillSlot_Decoy.")]
+    public Image           decoyFill;
+    [Tooltip("Skill_CD TMP label inside SkillSlot_Decoy.")]
     public TextMeshProUGUI decoyTimerText;
 
-    // ── Magnet (Collector) ────────────────────────────────────────────────────
-    [Header("Magnet (Collector)")]
-    [Tooltip("Root GameObject that groups all magnet HUD elements. " +
-             "Shown only for the Collector role.")]
-    public GameObject      magnetPanel;
-
-    [Tooltip("Image component with Image Type = Filled. " +
-             "Fill Amount is driven by the cooldown (1 = cooling down, 0 = ready).")]
+    // Magnet — now just another slot inside abilityPanel, not a separate panel
+    [Tooltip("Bar_Fill Image inside SkillSlot_Magnet (child of AbilityPanel).")]
     public Image           magnetFill;
-
-    [Tooltip("TMP label: shows remaining cooldown seconds or 'Ready!' when available.")]
+    [Tooltip("Skill_CD TMP label inside SkillSlot_Magnet.")]
     public TextMeshProUGUI magnetTimerText;
-
-    [Tooltip("GameObject shown (activated) while the magnet is actively pulling candy. " +
-             "Hide it by default — this script shows/hides it at runtime.")]
+    [Tooltip("Optional: extra glow/indicator object shown while magnet is active. " +
+             "Leave empty if not used.")]
     public GameObject      magnetActiveIndicator;
-    // ─────────────────────────────────────────────────────────────────────────
 
     [Header("Smoke Grenade (Shooter)")]
     [Tooltip("Root GameObject that groups the smoke grenade HUD elements. " +
@@ -78,7 +114,7 @@ public class HUDManager : MonoBehaviour
     [Tooltip("Image component with Image Type = Filled. Fill Amount drives the cooldown.")]
     public Image           smokeGrenadeFill;
 
-    [Tooltip("TMP label showing remaining cooldown seconds, or 'Ready!' when available.")]
+    [Tooltip("TMP label showing remaining cooldown as an integer. Hidden when ready.")]
     public TextMeshProUGUI smokeGrenadeTimerText;
 
     [Tooltip("TMP label showing current charge count, e.g. 'x2'.")]
@@ -98,6 +134,8 @@ public class HUDManager : MonoBehaviour
     public GameObject  inventoryPanel;
     public InventoryUI inventoryUI;
 
+
+
     // ── Private runtime ───────────────────────────────────────────────────────
 
     private PlayerStats         _player;
@@ -107,7 +145,15 @@ public class HUDManager : MonoBehaviour
     private float               _superSpeedMax = 30f;
     private float               _decoyMax      = 20f;
     private float               _smokeMax      = 25f;
-    private float               _magnetMax     = 25f;   // ← NEW
+    private float               _magnetMax     = 25f;
+
+    // Skill state cache
+    private float _superSpeedCD;
+    private bool  _superSpeedIsActive;
+    private float _decoyCD;
+    private int   _decoyChargesLocal;
+    private float _magnetCD;
+    private bool  _magnetIsActive;
 
     private void Awake()
     {
@@ -121,10 +167,10 @@ public class HUDManager : MonoBehaviour
         reloadText?.gameObject.SetActive(false);
         SetInventoryVisible(false);
 
-        if (smokeOverlayPanel   != null) smokeOverlayPanel.SetActive(false);
-        if (smokeGrenadePanel   != null) smokeGrenadePanel.SetActive(false);
-        if (magnetPanel         != null) magnetPanel.SetActive(false);          // ← NEW
-        if (magnetActiveIndicator != null) magnetActiveIndicator.SetActive(false); // ← NEW
+        if (smokeOverlayPanel     != null) smokeOverlayPanel.SetActive(false);
+        if (smokeGrenadePanel     != null) smokeGrenadePanel.SetActive(false);
+        if (magnetActiveIndicator != null) magnetActiveIndicator.SetActive(false);
+        // NOTE: abilityPanel visibility is set in ResetAndInitialize — not here.
     }
 
     private void OnDestroy() { if (Instance == this) Instance = null; }
@@ -139,13 +185,17 @@ public class HUDManager : MonoBehaviour
         ps.onHealthChanged.AddListener(UpdateHealth);
         UpdateHealth(ps.currentHP.Value, ps.maxHP > 0f ? ps.maxHP : ps.shooterMaxHP);
 
+        ApplyHeartSprites(ps.role.Value);
+        ps.role.OnValueChanged += (_, next) => ApplyHeartSprites(next);
+
         WireGameManager();
 
         bool isShooter = ps.role.Value == PlayerRole.Shooter;
+
+        // All three skill slots live inside abilityPanel — one toggle does all.
         ammoPanel?.SetActive(isShooter);
         candyPanel?.SetActive(!isShooter);
         abilityPanel?.SetActive(!isShooter);
-        magnetPanel?.SetActive(!isShooter);        // ← NEW: show magnet panel for Collector
         smokeGrenadePanel?.SetActive(isShooter);
 
         if (isShooter)
@@ -173,23 +223,33 @@ public class HUDManager : MonoBehaviour
             CollectorController cc = ps.GetComponent<CollectorController>();
             if (cc != null)
             {
-                _trackedCollector = cc;
-                _superSpeedMax    = cc.superSpeedCooldown;
-                _decoyMax         = cc.decoyCooldown;
-                _magnetMax        = cc.magnetCooldown;    // ← NEW
+                _trackedCollector  = cc;
+                _superSpeedMax     = cc.superSpeedCooldown;
+                _decoyMax          = cc.decoyCooldown;
+                _magnetMax         = cc.magnetCooldown;
+
+                // Reset cached state
+                _superSpeedCD      = 0f;
+                _superSpeedIsActive = false;
+                _decoyCD           = 0f;
+                _decoyChargesLocal  = cc.decoyMaxCharges;
+                _magnetCD          = 0f;
+                _magnetIsActive    = false;
 
                 cc.onCandyCountChanged.AddListener(UpdateCandyCount);
                 cc.onSuperSpeedCooldown.AddListener(UpdateSuperSpeedCD);
+                cc.onSuperSpeedActiveChanged.AddListener(UpdateSuperSpeedActive);
                 cc.onDecoyCooldown.AddListener(UpdateDecoyCD);
-
-                // ── NEW: wire magnet events ───────────────────────────────────
+                cc.onDecoyChargesChanged.AddListener(UpdateDecoyCharges);
                 cc.onMagnetCooldown.AddListener(UpdateMagnetCD);
                 cc.onMagnetActiveChanged.AddListener(UpdateMagnetActive);
 
                 UpdateCandyCount(0);
-                UpdateMagnetCD(0f);          // show "Ready!" immediately
-                UpdateMagnetActive(false);   // hide indicator
-                // ─────────────────────────────────────────────────────────────
+
+                // Draw all three bars in their initial "ready" state
+                RefreshSuperSpeedBar();
+                RefreshDecoyBar();
+                RefreshMagnetBar();
             }
         }
     }
@@ -283,6 +343,12 @@ public class HUDManager : MonoBehaviour
         w.onReloadStart.AddListener(ShowReloadText);
         w.onReloadEnd.AddListener(HideReloadText);
         UpdateAmmo(w.GetCurrentAmmo(), w.GetTotalAmmo());
+
+        if (weaponIconImage != null)
+        {
+            weaponIconImage.sprite  = w.weaponIcon;
+            weaponIconImage.enabled = w.weaponIcon != null;
+        }
     }
 
     public void RefreshShooterAmmo(ShooterController sc)
@@ -302,7 +368,6 @@ public class HUDManager : MonoBehaviour
         ammoPanel?.SetActive(true);
         candyPanel?.SetActive(false);
         abilityPanel?.SetActive(false);
-        magnetPanel?.SetActive(false);     // ← NEW: hide magnet for shooters
         smokeGrenadePanel?.SetActive(true);
     }
 
@@ -328,14 +393,12 @@ public class HUDManager : MonoBehaviour
         {
             _trackedCollector.onCandyCountChanged.RemoveListener(UpdateCandyCount);
             _trackedCollector.onSuperSpeedCooldown.RemoveListener(UpdateSuperSpeedCD);
+            _trackedCollector.onSuperSpeedActiveChanged.RemoveListener(UpdateSuperSpeedActive);
             _trackedCollector.onDecoyCooldown.RemoveListener(UpdateDecoyCD);
-
-            // ── NEW: unsubscribe magnet events ────────────────────────────────
+            _trackedCollector.onDecoyChargesChanged.RemoveListener(UpdateDecoyCharges);
             _trackedCollector.onMagnetCooldown.RemoveListener(UpdateMagnetCD);
             _trackedCollector.onMagnetActiveChanged.RemoveListener(UpdateMagnetActive);
             if (magnetActiveIndicator != null) magnetActiveIndicator.SetActive(false);
-            // ─────────────────────────────────────────────────────────────────
-
             _trackedCollector = null;
         }
 
@@ -363,8 +426,8 @@ public class HUDManager : MonoBehaviour
 
     private void UpdateScore(int a, int b)
     {
-        if (teamAScoreText) teamAScoreText.text = $"Team A: {a}";
-        if (teamBScoreText) teamBScoreText.text = $"Team B: {b}";
+        if (teamAScoreText) teamAScoreText.text = a.ToString();
+        if (teamBScoreText) teamBScoreText.text = b.ToString();
     }
 
     private void UpdateTimer(float secs)
@@ -376,16 +439,30 @@ public class HUDManager : MonoBehaviour
         timerText.color = secs <= 30f ? Color.Lerp(Color.red, Color.white, secs / 30f) : Color.white;
     }
 
+    // ── HEART SPRITE SWAP ─────────────────────────────────────────────────────
+
+    private void ApplyHeartSprites(PlayerRole role)
+    {
+        bool isShooter = role == PlayerRole.Shooter;
+        if (heartFillImage    != null) heartFillImage.sprite    = isShooter ? shooterHeartFill    : collectorHeartFill;
+        if (heartOutlineImage != null) heartOutlineImage.sprite = isShooter ? shooterHeartOutline : collectorHeartOutline;
+    }
+
+    // ── HEART HP UPDATE ───────────────────────────────────────────────────────
+
     private void UpdateHealth(float cur, float max)
     {
         if (max <= 0f) return;
-        if (healthBar)  healthBar.value = cur / max;
-        if (healthText) healthText.text = $"{Mathf.CeilToInt(cur)} / {Mathf.CeilToInt(max)}";
+        float fraction = Mathf.Clamp01(cur / max);
+        if (heartFillImage != null) heartFillImage.fillAmount = fraction;
+        if (healthText     != null) healthText.text = $"{Mathf.CeilToInt(cur)}";
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
 
     private void UpdateAmmo(int cur, int total)
     {
-        if (ammoText) ammoText.text = $"{cur} / ∞";
+        if (ammoText) ammoText.text = $"{cur}";
     }
 
     private void UpdateCandyCount(int count)
@@ -393,52 +470,147 @@ public class HUDManager : MonoBehaviour
         if (candyCountText) candyCountText.text = $"Carrying: {count}";
     }
 
-    private void UpdateSuperSpeedCD(float r)
+    // ══════════════════════════════════════════════════════════════════════════
+    //  SKILL BAR LOGIC — identical visual rules for all three skills:
+    //
+    //  ACTIVE / READY  →  SkillReadyColor  (pink),  fillAmount = 1,  timer hidden
+    //  ON COOLDOWN     →  SkillCooldownColor (grey), fillAmount 0→1, timer shows secs
+    // ══════════════════════════════════════════════════════════════════════════
+
+    // ── SUPER SPEED ───────────────────────────────────────────────────────────
+
+    private void UpdateSuperSpeedCD(float remaining)
     {
-        if (superSpeedFill)      superSpeedFill.fillAmount = _superSpeedMax > 0f ? r / _superSpeedMax : 0f;
-        if (superSpeedTimerText) superSpeedTimerText.text  = r > 0f ? $"{r:F1}s" : "Ready!";
+        _superSpeedCD = remaining;
+        RefreshSuperSpeedBar();
     }
 
-    private void UpdateDecoyCD(float r)
+    private void UpdateSuperSpeedActive(bool isActive)
     {
-        if (decoyFill)      decoyFill.fillAmount = _decoyMax > 0f ? r / _decoyMax : 0f;
-        if (decoyTimerText) decoyTimerText.text  = r > 0f ? $"{r:F1}s" : "Ready!";
+        _superSpeedIsActive = isActive;
+        RefreshSuperSpeedBar();
     }
 
-    // ── Magnet HUD ─────────────────────────────────────────────────────────────
+    private void RefreshSuperSpeedBar()
+    {
+        // While ACTIVE: bar is pink and full.
+        // While COOLDOWN: bar is grey and fills 0→1.
+        // When READY: bar is pink and full.
+        bool onCooldown = _superSpeedCD > 0.05f && !_superSpeedIsActive;
 
-    /// <summary>
-    /// Called by CollectorController.onMagnetCooldown every frame during countdown.
-    /// remaining == 0 signals "Ready!".
-    /// </summary>
+        if (superSpeedFill != null)
+        {
+            if (_superSpeedIsActive || !onCooldown)
+                superSpeedFill.fillAmount = 1f;
+            else
+                superSpeedFill.fillAmount = _superSpeedMax > 0f
+                    ? 1f - (_superSpeedCD / _superSpeedMax)
+                    : 0f;
+        }
+
+        if (superSpeedTimerText != null)
+        {
+            superSpeedTimerText.gameObject.SetActive(onCooldown);
+            superSpeedTimerText.text = onCooldown ? Mathf.CeilToInt(_superSpeedCD).ToString() : "";
+        }
+    }
+
+    // ── DECOY ─────────────────────────────────────────────────────────────────
+
+    private void UpdateDecoyCD(float remaining)
+    {
+        _decoyCD = remaining;
+        RefreshDecoyBar();
+    }
+
+    private void UpdateDecoyCharges(int charges)
+    {
+        _decoyChargesLocal = charges;
+        RefreshDecoyBar();
+    }
+
+    private void RefreshDecoyBar()
+    {
+        // HAS CHARGES: bar is pink and full.
+        // COOLDOWN:    bar is grey and fills 0→1.
+        bool onCooldown = _decoyCD > 0.05f;
+        bool hasCharges = _decoyChargesLocal > 0;
+
+        if (decoyFill != null)
+        {
+            if (hasCharges || !onCooldown)
+                decoyFill.fillAmount = 1f;
+            else
+                decoyFill.fillAmount = _decoyMax > 0f
+                    ? 1f - (_decoyCD / _decoyMax)
+                    : 0f;
+        }
+
+        if (decoyTimerText != null)
+        {
+            decoyTimerText.gameObject.SetActive(onCooldown);
+            decoyTimerText.text = onCooldown ? Mathf.CeilToInt(_decoyCD).ToString() : "";
+        }
+    }
+
+    // ── MAGNET ────────────────────────────────────────────────────────────────
+
     private void UpdateMagnetCD(float remaining)
     {
-        if (magnetFill)
-            magnetFill.fillAmount = _magnetMax > 0f ? remaining / _magnetMax : 0f;
-
-        if (magnetTimerText)
-            magnetTimerText.text = remaining > 0f ? $"{remaining:F1}s" : "Ready!";
+        _magnetCD = remaining;
+        RefreshMagnetBar();
     }
 
-    /// <summary>
-    /// Called by CollectorController.onMagnetActiveChanged when the magnet
-    /// starts or stops. Shows/hides the active indicator.
-    /// </summary>
     private void UpdateMagnetActive(bool isActive)
     {
+        _magnetIsActive = isActive;
         if (magnetActiveIndicator != null)
             magnetActiveIndicator.SetActive(isActive);
+        RefreshMagnetBar();
     }
 
-    // ── Smoke grenade UI ──────────────────────────────────────────────────────
+    private void RefreshMagnetBar()
+    {
+        // While ACTIVE: bar is pink and full (magnet is pulling — ability running).
+        // While COOLDOWN: bar is grey and fills 0→1.
+        // When READY: bar is pink and full.
+        bool onCooldown = _magnetCD > 0.05f && !_magnetIsActive;
+
+        if (magnetFill != null)
+        {
+            if (_magnetIsActive || !onCooldown)
+                magnetFill.fillAmount = 1f;
+            else
+                magnetFill.fillAmount = _magnetMax > 0f
+                    ? 1f - (_magnetCD / _magnetMax)
+                    : 0f;
+        }
+
+        if (magnetTimerText != null)
+        {
+            magnetTimerText.gameObject.SetActive(onCooldown);
+            magnetTimerText.text = onCooldown ? Mathf.CeilToInt(_magnetCD).ToString() : "";
+        }
+    }
+
+    // ── SMOKE GRENADE BAR (Shooter) ───────────────────────────────────────────
 
     private void UpdateSmokeCooldown(float remaining)
     {
-        if (smokeGrenadeFill)
-            smokeGrenadeFill.fillAmount = _smokeMax > 0f ? remaining / _smokeMax : 0f;
+        bool onCooldown = remaining > 0.05f;
 
-        if (smokeGrenadeTimerText)
-            smokeGrenadeTimerText.text = remaining > 0f ? $"{remaining:F1}s" : "Ready!";
+        if (smokeGrenadeFill != null)
+        {
+            smokeGrenadeFill.fillAmount = _smokeMax > 0f
+                ? onCooldown ? 1f - (remaining / _smokeMax) : 1f
+                : 1f;
+        }
+
+        if (smokeGrenadeTimerText != null)
+        {
+            smokeGrenadeTimerText.gameObject.SetActive(onCooldown);
+            smokeGrenadeTimerText.text = onCooldown ? Mathf.CeilToInt(remaining).ToString() : "";
+        }
     }
 
     private void UpdateSmokeCharges(int charges)

@@ -19,6 +19,10 @@ public abstract class WeaponBase : NetworkBehaviour
     public string weaponName  = "Weapon";
     public bool   isAutomatic = false;
 
+    [Tooltip("Icon sprite shown in the HUD ammo panel next to the ammo counter. " +
+             "Assign the weapon's icon in each weapon prefab/child Inspector.")]
+    public Sprite weaponIcon;
+
     [Header("Stats")]
     public float damage       = 25f;
     public float fireRate     = 0.2f;
