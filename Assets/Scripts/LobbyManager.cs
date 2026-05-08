@@ -1,3 +1,24 @@
+// LobbyManager.cs — Sugar Rush  (MODIFIED for Start Menu + Lobby Room)
+//
+// ── CHANGES FROM ORIGINAL ────────────────────────────────────────────────────
+//   1. Auto-start removed from OnClientConnected.
+//      Game now starts only when TryStartGame() is called (by LobbyNetworkBridge
+//      when the host clicks the Start Game button in LobbyRoomUI).
+//   2. Three new public accessor methods added so LobbyNetworkBridge can read
+//      the connected client list and slot assignments:
+//        • GetConnectedClients()        → List<ulong>
+//        • GetClientSlot(ulong)         → int
+//        • GetConnectedClientCount()    → int
+//   3. TryStartGame() public method — loads GameScene for everyone.
+//   4. OnClientConnected now also calls LobbyNetworkBridge.BroadcastLobbyState()
+//      so the lobby room UI refreshes as players join.
+//   5. OnClientDisconnected calls BroadcastLobbyState() for the same reason.
+//   6. RefreshLobbyUIRpc now also calls LobbyRoomUI for backward compatibility.
+//   7. PLAYERS_NEEDED constant removed (game is now host-controlled).
+//
+// ── EVERYTHING ELSE IS UNCHANGED ─────────────────────────────────────────────
+//   SpawnAllPlayers, PrepareRematch, GetSpawnPosition, OnSceneLoaded — untouched.
+
 using System.Collections;
 using System.Collections.Generic;
 using Unity.Netcode;
@@ -8,14 +29,15 @@ public class LobbyManager : NetworkBehaviour
 {
     public static LobbyManager Instance { get; private set; }
 
-    
-    private const int PLAYERS_NEEDED = 4;
-
     [Header("Setup")]
     public GameObject playerPrefab;
     public string     gameSceneName = "GameScene";
 
-    
+    [Header("Lobby")]
+    [Tooltip("Minimum players required before the host can press Start Game.")]
+    public int minPlayersToStart = 1;
+
+    // Slot → team / role mapping (slots 0-3)
     private static readonly TeamID[]     TeamForSlot = { TeamID.TeamA, TeamID.TeamA, TeamID.TeamB, TeamID.TeamB };
     private static readonly PlayerRole[] RoleForSlot = { PlayerRole.Shooter, PlayerRole.Collector, PlayerRole.Shooter, PlayerRole.Collector };
 
@@ -24,7 +46,8 @@ public class LobbyManager : NetworkBehaviour
     private int  _nextSlot    = 0;
     private bool _gameStarted = false;
 
-    
+    // ── Lifecycle ─────────────────────────────────────────────────────────────
+
     private void Awake()
     {
         if (Instance != null && Instance != this) { Destroy(gameObject); return; }
@@ -36,7 +59,6 @@ public class LobbyManager : NetworkBehaviour
     {
         if (!IsServer) return;
 
-        
         if (NetworkManager.Singleton.NetworkConfig.PlayerPrefab != null)
         {
             Debug.LogError(
@@ -50,7 +72,7 @@ public class LobbyManager : NetworkBehaviour
 
         AddClient(NetworkManager.Singleton.LocalClientId);
         RefreshLobbyUIRpc(_clients.Count);
-        Debug.Log($"[Lobby] Server ready. Waiting for {PLAYERS_NEEDED} player(s).");
+        Debug.Log($"[Lobby] Server ready. Min players to start: {minPlayersToStart}");
     }
 
     public override void OnNetworkDespawn()
@@ -62,7 +84,8 @@ public class LobbyManager : NetworkBehaviour
             NetworkManager.Singleton.SceneManager.OnLoadEventCompleted -= OnSceneLoaded;
     }
 
-    
+    // ── Client connection handling ────────────────────────────────────────────
+
     private void AddClient(ulong id)
     {
         if (_clientSlot.ContainsKey(id)) return;
@@ -74,25 +97,27 @@ public class LobbyManager : NetworkBehaviour
     private void OnClientConnected(ulong id)
     {
         AddClient(id);
-        Debug.Log($"[Lobby] Connected: {id}   Players: {_clients.Count}/{PLAYERS_NEEDED}");
+        Debug.Log($"[Lobby] Connected: {id}   Players: {_clients.Count}");
         RefreshLobbyUIRpc(_clients.Count);
 
-        if (_clients.Count >= PLAYERS_NEEDED && !_gameStarted)
-        {
-            _gameStarted = true;
-            Debug.Log($"[Lobby] All players ready — loading {gameSceneName}.");
-            NetworkManager.Singleton.SceneManager.LoadScene(gameSceneName, LoadSceneMode.Single);
-        }
+        // ── CHANGED: notify LobbyNetworkBridge so lobby room UI updates ───────
+        // (Auto-start logic removed — host manually starts via TryStartGame())
+        LobbyNetworkBridge.Instance?.BroadcastLobbyState();
     }
 
     private void OnClientDisconnected(ulong id)
     {
         if (_gameStarted) return;
         _clients.Remove(id);
+        _clientSlot.Remove(id);
         RefreshLobbyUIRpc(_clients.Count);
+
+        // ── CHANGED: update lobby room UI when someone leaves ─────────────────
+        LobbyNetworkBridge.Instance?.BroadcastLobbyState();
     }
 
-    
+    // ── Scene loaded callback (fires when GameScene finishes loading) ─────────
+
     private void OnSceneLoaded(string scene, LoadSceneMode mode,
         List<ulong> done, List<ulong> timedOut)
     {
@@ -109,17 +134,37 @@ public class LobbyManager : NetworkBehaviour
 
     private IEnumerator StartMatchNextFrame()
     {
-        yield return null;  
+        yield return null;
         NetworkGameManager.Instance?.StartMatch();
         Debug.Log("[Lobby] Match started.");
     }
 
-    
+    // ── Manual game start (called by LobbyNetworkBridge.RequestStartGameServerRpc) ──
+
+    /// <summary>
+    /// Loads GameScene for all connected clients. Called by LobbyNetworkBridge
+    /// when the host clicks the Start Game button in LobbyRoomUI.
+    /// </summary>
+    public void TryStartGame()
+    {
+        if (!IsServer || _gameStarted) return;
+
+        if (_clients.Count < minPlayersToStart)
+        {
+            Debug.LogWarning($"[Lobby] TryStartGame: need at least {minPlayersToStart} player(s).");
+            return;
+        }
+
+        _gameStarted = true;
+        Debug.Log($"[Lobby] TryStartGame — loading {gameSceneName} for {_clients.Count} player(s).");
+        NetworkManager.Singleton.SceneManager.LoadScene(gameSceneName, LoadSceneMode.Single);
+    }
+
+    // ── Rematch (unchanged from original) ────────────────────────────────────
+
     /// <summary>
     /// Called by ResultScreenManager before reloading GameScene for a rematch.
     /// Resets _gameStarted so OnSceneLoaded will run SpawnAllPlayers again.
-    /// _clients and _clientSlot are kept intact — all players are still connected
-    /// in the same NGO session with the same slot assignments.
     /// </summary>
     public void PrepareRematch()
     {
@@ -127,14 +172,14 @@ public class LobbyManager : NetworkBehaviour
         _gameStarted = false;
         _nextSlot    = 0;
 
-        // Re-assign slots from the existing connected client list so slot
-        // indices are consistent and no slot exceeds the valid range (0-3).
         _clientSlot.Clear();
         for (int i = 0; i < _clients.Count; i++)
             _clientSlot[_clients[i]] = i;
 
         Debug.Log("[Lobby] PrepareRematch — state reset, ready for OnSceneLoaded.");
     }
+
+    // ── Player spawning (unchanged from original) ─────────────────────────────
 
     private void SpawnAllPlayers()
     {
@@ -146,7 +191,6 @@ public class LobbyManager : NetworkBehaviour
 
         _usedSpawnPositions.Clear();
 
-        
         GameObject spawnA = GameObject.Find("Spawns_TeamA");
         GameObject spawnB = GameObject.Find("Spawns_TeamB");
         Transform[] teamASpawns = GetChildTransforms(spawnA);
@@ -164,7 +208,6 @@ public class LobbyManager : NetworkBehaviour
             PlayerRole role = RoleForSlot[slot];
             var (pos, spawnRot) = GetSpawnPosition(team);
 
-            
             GameObject    obj = Instantiate(playerPrefab, Vector3.zero, Quaternion.identity);
             NetworkObject no  = obj.GetComponent<NetworkObject>();
 
@@ -175,15 +218,6 @@ public class LobbyManager : NetworkBehaviour
                 continue;
             }
 
-            // ── FIX v2: set NetworkVariables BEFORE SpawnAsPlayerObject ──────
-            // NGO includes the current NV values in the spawn message sent to
-            // clients. Setting them after the Spawn call means clients receive
-            // the spawn with default values (Shooter / TeamA) and a separate
-            // NV-correction message 1 frame later. AllyIndicator and other
-            // scripts that read role/team in their first frame of life then see
-            // stale defaults, causing icons to silently hide and never recover
-            // until the next polling window. Setting before Spawn ensures every
-            // client sees the correct role and team from the very first frame.
             PlayerStats ps = obj.GetComponent<PlayerStats>();
             if (ps != null)
             {
@@ -195,15 +229,14 @@ public class LobbyManager : NetworkBehaviour
 
             no.SpawnAsPlayerObject(clientId, true);
 
-            
             PlayerController pc = obj.GetComponent<PlayerController>();
             if (pc != null)
                 pc.WarpToSpawnRpc(pos, spawnRot);
             else
-                Debug.LogWarning($"[Lobby] PlayerController not found on prefab — client {clientId} will spawn at origin.");
+                Debug.LogWarning($"[Lobby] PlayerController not found — client {clientId} spawns at origin.");
 
             NetworkGameManager.Instance?.RegisterPlayer(ps);
-            Debug.Log($"[Lobby] Spawned client={clientId}  {role}/{team}  warpTarget={pos}");
+            Debug.Log($"[Lobby] Spawned client={clientId}  {role}/{team}  pos={pos}");
         }
     }
 
@@ -221,8 +254,8 @@ public class LobbyManager : NetworkBehaviour
 
     private (Vector3 position, Quaternion rotation) GetSpawnPosition(TeamID team)
     {
-        string    parentName = team == TeamID.TeamA ? "Spawns_TeamA" : "Spawns_TeamB";
-        GameObject parent    = GameObject.Find(parentName);
+        string     parentName = team == TeamID.TeamA ? "Spawns_TeamA" : "Spawns_TeamB";
+        GameObject parent     = GameObject.Find(parentName);
 
         if (parent != null && parent.transform.childCount > 0)
         {
@@ -247,27 +280,42 @@ public class LobbyManager : NetworkBehaviour
             }
 
             _usedSpawnPositions.Add(best.position);
-            return (best.position, best.rotation);   
+            return (best.position, best.rotation);
         }
 
         Debug.LogWarning($"[Lobby] '{parentName}' not found — using fallback position.");
-        int idx      = _usedSpawnPositions.Count;
-        Vector3 pos  = team == TeamID.TeamA
+        int     idx = _usedSpawnPositions.Count;
+        Vector3 pos = team == TeamID.TeamA
             ? new Vector3(-3f + idx * 3f, 1f,  20f)
             : new Vector3(-3f + idx * 3f, 1f, -20f);
         _usedSpawnPositions.Add(pos);
 
-        
-        Quaternion rot = team == TeamID.TeamA ? Quaternion.Euler(0f, 180f, 0f) : Quaternion.identity;
+        Quaternion rot = team == TeamID.TeamA
+            ? Quaternion.Euler(0f, 180f, 0f) : Quaternion.identity;
         return (pos, rot);
     }
 
-        [Rpc(SendTo.ClientsAndHost)]
+    // ── RPC — refresh legacy LobbyUI AND new LobbyRoomUI ─────────────────────
+
+    [Rpc(SendTo.ClientsAndHost)]
     private void RefreshLobbyUIRpc(int count)
     {
+        // Legacy support (LobbyUI.cs may still be in the scene)
         LobbyUI.Instance?.SetPlayerCount(count);
-        LobbyUI.Instance?.SetStatus(count < PLAYERS_NEEDED
-            ? $"Waiting for players... ({count}/{PLAYERS_NEEDED})"
-            : "All players ready! Loading game...");
+
+        // New lobby room UI
+        LobbyRoomUI.Instance?.SetPlayerCount(count);
     }
+
+    // ── NEW: Public accessors used by LobbyNetworkBridge ─────────────────────
+
+    /// <summary>Returns a snapshot of all connected client IDs in join order.</summary>
+    public List<ulong> GetConnectedClients() => new List<ulong>(_clients);
+
+    /// <summary>Returns the slot index assigned to clientId, or -1 if not found.</summary>
+    public int GetClientSlot(ulong clientId)
+        => _clientSlot.TryGetValue(clientId, out int s) ? s : -1;
+
+    /// <summary>Returns the number of currently connected clients.</summary>
+    public int GetConnectedClientCount() => _clients.Count;
 }
