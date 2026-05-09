@@ -4,7 +4,7 @@
 //   Controls every panel in StartMenuScene:
 //     • Main Menu      (Play Game / How To Play / Settings / Quit)
 //     • How To Play    (info screen)
-//     • Settings       (volume / sensitivity / quality)
+//     • Settings       (master volume / music volume / mouse sensitivity)
 //     • Play Mode      (Host Game / Join Game)
 //     • Host Setup     (enter player name → Create Room)
 //     • Join Setup     (enter player name + host IP → Connect)
@@ -59,9 +59,7 @@ public class StartMenuManager : MonoBehaviour
 
     public Slider  sliderMasterVolume;
     public Slider  sliderMusicVolume;
-    public Slider  sliderSFXVolume;
     public Slider  sliderMouseSensitivity;
-    public TMP_Dropdown dropdownQuality;
     public Button  btnSettingsBack;
     public TextMeshProUGUI lblMouseSensValue;   // optional: shows numeric value
 
@@ -140,9 +138,7 @@ public class StartMenuManager : MonoBehaviour
         if (btnSettingsBack       != null) btnSettingsBack.onClick.AddListener(OnSettingsBack);
         if (sliderMasterVolume    != null) sliderMasterVolume.onValueChanged.AddListener(OnMasterVolumeChanged);
         if (sliderMusicVolume     != null) sliderMusicVolume.onValueChanged.AddListener(OnMusicVolumeChanged);
-        if (sliderSFXVolume       != null) sliderSFXVolume.onValueChanged.AddListener(OnSFXVolumeChanged);
         if (sliderMouseSensitivity!= null) sliderMouseSensitivity.onValueChanged.AddListener(OnMouseSensChanged);
-        if (dropdownQuality       != null) dropdownQuality.onValueChanged.AddListener(OnQualityChanged);
 
         // Play mode
         if (btnHostGame    != null) btnHostGame.onClick.AddListener(() => ShowPanel(panelHostSetup));
@@ -187,20 +183,14 @@ public class StartMenuManager : MonoBehaviour
 
     private void LoadSettings()
     {
-        float master  = PlayerPrefs.GetFloat("SR_MasterVol",  1f);
-        float music   = PlayerPrefs.GetFloat("SR_MusicVol",   1f);
-        float sfx     = PlayerPrefs.GetFloat("SR_SFXVol",     1f);
-        float sens    = PlayerPrefs.GetFloat("SR_MouseSens",  3f);
-        int   quality = PlayerPrefs.GetInt  ("SR_Quality",    QualitySettings.GetQualityLevel());
+        float master = PlayerPrefs.GetFloat("SR_MasterVol", 1f);
+        float music  = PlayerPrefs.GetFloat("SR_MusicVol",  1f);
+        float sens   = PlayerPrefs.GetFloat("SR_MouseSens", 3f);
 
         // Set slider values (this fires onValueChanged → applies the settings)
         if (sliderMasterVolume    != null) sliderMasterVolume.value    = master;
         if (sliderMusicVolume     != null) sliderMusicVolume.value     = music;
-        if (sliderSFXVolume       != null) sliderSFXVolume.value       = sfx;
         if (sliderMouseSensitivity!= null) sliderMouseSensitivity.value= sens;
-        if (dropdownQuality       != null) dropdownQuality.value       = quality;
-
-        QualitySettings.SetQualityLevel(quality);
     }
 
     private void OnMasterVolumeChanged(float v)
@@ -216,22 +206,10 @@ public class StartMenuManager : MonoBehaviour
         PlayerPrefs.SetFloat("SR_MusicVol", v);
     }
 
-    private void OnSFXVolumeChanged(float v)
-    {
-        SetMixerVolume("SFXVolume", v);
-        PlayerPrefs.SetFloat("SR_SFXVol", v);
-    }
-
     private void OnMouseSensChanged(float v)
     {
         if (lblMouseSensValue != null) lblMouseSensValue.text = v.ToString("F1");
         PlayerPrefs.SetFloat("SR_MouseSens", v);
-    }
-
-    private void OnQualityChanged(int v)
-    {
-        QualitySettings.SetQualityLevel(v);
-        PlayerPrefs.SetInt("SR_Quality", v);
     }
 
     private void SetMixerVolume(string exposedParam, float linearValue)
