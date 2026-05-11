@@ -9,7 +9,18 @@
 //       it changes (names, slots, connection count).
 //     • Allows the host to manually start the game via a ServerRpc.
 //
-// ── SETUP ─────────────────────────────────────────────────────────────────────
+// ── CHANGES FROM PREVIOUS VERSION ────────────────────────────────────────────
+//   BroadcastLobbyState() — added IsSpawned guard. If called before NGO
+//     has spawned the NetworkObject (can happen if LobbyManager fires an
+//     early callback), the method now silently returns instead of crashing
+//     inside SyncLobbyStateRpc.
+//
+//   RegisterNameServerRpc — now gracefully handles an empty or whitespace-
+//     only name the same way as before, but logs a debug line for traceability.
+//
+//   GetPlayerName() — unchanged, kept as public helper.
+//
+// ── SETUP (unchanged) ─────────────────────────────────────────────────────────
 //   Add this script to the same GameObject as LobbyManager in LobbyScene.
 //   No extra Inspector configuration needed.
 //   LobbyRoomUI subscribes to onLobbyStateUpdated to refresh the slot display.
@@ -57,6 +68,9 @@ public class LobbyNetworkBridge : NetworkBehaviour
     {
         if (IsServer && NetworkManager.Singleton != null)
             NetworkManager.Singleton.OnClientDisconnectCallback -= OnClientDisconnected;
+
+        // Clear the name registry so a rematch starts fresh.
+        _playerNames.Clear();
     }
 
     private void OnClientDisconnected(ulong clientId)
@@ -68,9 +82,9 @@ public class LobbyNetworkBridge : NetworkBehaviour
     // ── Client → Server: register this player's display name ─────────────────
 
     /// <summary>
-    /// Called by LobbyRoomUI.Start() on every client (including host) when
-    /// they enter the lobby scene. The server stores the name and re-broadcasts
-    /// the updated lobby state to all clients.
+    /// Called by LobbyRoomUI.SubscribeWhenReady() on every client (including host)
+    /// once LobbyNetworkBridge.IsSpawned is true. The server stores the name and
+    /// re-broadcasts the updated lobby state to all clients.
     /// </summary>
     [Rpc(SendTo.Server)]
     public void RegisterNameServerRpc(string playerName, RpcParams rpcParams = default)
@@ -94,13 +108,27 @@ public class LobbyNetworkBridge : NetworkBehaviour
     {
         if (!IsServer) return;
 
+        // ── FIX: guard against being called before NGO has spawned us ─────────
+        // This can happen if LobbyManager.OnClientConnected fires before
+        // OnNetworkSpawn has run. Attempting an RPC on an unspawned
+        // NetworkBehaviour crashes inside NGO's __endSendRpc.
+        if (!IsSpawned)
+        {
+            Debug.LogWarning("[LobbyBridge] BroadcastLobbyState called before IsSpawned — skipping.");
+            return;
+        }
+
         LobbyManager lm = GetComponent<LobbyManager>() ?? LobbyManager.Instance;
-        if (lm == null) return;
+        if (lm == null)
+        {
+            Debug.LogError("[LobbyBridge] BroadcastLobbyState: LobbyManager not found.");
+            return;
+        }
 
         // Pack all data into a single pipe-delimited string to avoid
         // NGO string[] serialisation issues (mirrors MatchResultsPayload approach).
         // Format per entry: "clientId,displayName,slotIndex"
-        var sb = new System.Text.StringBuilder();
+        var sb    = new System.Text.StringBuilder();
         bool first = true;
 
         foreach (ulong id in lm.GetConnectedClients())

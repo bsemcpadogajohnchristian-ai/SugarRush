@@ -52,11 +52,18 @@ public class LobbyManager : NetworkBehaviour
     {
         if (Instance != null && Instance != this) { Destroy(gameObject); return; }
         Instance = this;
-        DontDestroyOnLoad(gameObject);
+        // ── FIX: DontDestroyOnLoad removed from Awake. ────────────────────────
+        // Calling it here moves the GameObject OUT of the active scene before
+        // NGO scans for scene NetworkObjects (via GetActiveScene().GetRootGameObjects()).
+        // That caused IsSpawned to stay false forever → LobbyRoomUI 10 s timeout.
+        // It is now called in OnNetworkSpawn, after NGO has already spawned us.
     }
 
     public override void OnNetworkSpawn()
     {
+        // ── FIX: persist AFTER NGO has spawned this NetworkObject ─────────────
+        DontDestroyOnLoad(gameObject);
+
         if (!IsServer) return;
 
         if (NetworkManager.Singleton.NetworkConfig.PlayerPrefab != null)

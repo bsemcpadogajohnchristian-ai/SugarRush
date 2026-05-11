@@ -14,5 +14,8 @@ EditorBuildSettings:
   - enabled: 1
     path: Assets/Scenes/ResultScreen.unity
     guid: a1c46f386abb23c4983ef153d78b2534
+  - enabled: 1
+    path: Assets/Scenes/StartMenuScene.unity
+    guid: ba33fc1de8c56f54e8512cf36ca5f646
   m_configObjects: {}
   m_UseUCBPForAssetBundles: 0

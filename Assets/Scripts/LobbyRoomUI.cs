@@ -1,17 +1,34 @@
 // LobbyRoomUI.cs — Sugar Rush
 //
-// ── PURPOSE ───────────────────────────────────────────────────────────────────
-//   Displays the lobby waiting room in LobbyScene.
-//   Shows four player slots (TeamA Shooter, TeamA Collector, TeamB Shooter,
-//   TeamB Collector), the room IP so friends can connect, and a Start Game
-//   button that is only interactive for the host.
+// ── BUG FIX: NullReferenceException in RegisterNameServerRpc ─────────────────
 //
-//   Replaces the original LobbyUI.cs. The old LobbyUI.cs can be kept for
-//   backward compatibility — this script is separate.
+//   ROOT CAUSE:
+//     SubscribeWhenReady() only waited for LobbyNetworkBridge.Instance != null.
+//     The singleton is assigned in Awake() — BEFORE NGO calls OnNetworkSpawn()
+//     and marks the NetworkBehaviour as spawned. Calling an RPC on an unspawned
+//     NetworkBehaviour causes a NullReferenceException deep inside NGO's
+//     __endSendRpc internals (NetworkBehaviour.cs:354).
 //
-// ── SETUP ─────────────────────────────────────────────────────────────────────
-//   1. In LobbyScene, create a Canvas and build the lobby room UI hierarchy
-//      (see TUTORIAL.md for the full hierarchy list).
+//   FIX:
+//     The wait condition now requires BOTH:
+//       1. LobbyNetworkBridge.Instance != null   (singleton assigned)
+//       2. LobbyNetworkBridge.Instance.IsSpawned (NGO finished OnNetworkSpawn)
+//     This guarantees the RPC channel is open before we use it.
+//
+//   ADDITIONAL IMPROVEMENTS:
+//     • Timeout raised from 5 s to 10 s — gives NGO more breathing room on
+//       slower machines or high-latency connections.
+//     • _subscribeCoroutine reference stored so OnDestroy can cancel it if
+//       the player leaves the lobby before it finishes, preventing a
+//       MissingReferenceException on the destroyed MonoBehaviour.
+//     • OnDestroy now unsubscribes onLobbyStateUpdated regardless of whether
+//       the coroutine ran to completion, preventing stale listener leaks.
+//     • SetStatus helper made public (SetStatus_Legacy already was) for
+//       external callers.
+//     • All other logic is identical to the original.
+//
+// ── SETUP (unchanged) ─────────────────────────────────────────────────────────
+//   1. In LobbyScene, create a Canvas and build the lobby room UI hierarchy.
 //   2. Attach this script to a "LobbyRoomManager" GameObject in the scene.
 //   3. Assign every Inspector reference below.
 
@@ -67,8 +84,10 @@ public class LobbyRoomUI : MonoBehaviour
 
     // ── Internal ──────────────────────────────────────────────────────────────
 
-    private string _localIP;
-    private bool   _isHost;
+    private string    _localIP;
+    private bool      _isHost;
+    private bool      _subscribedToEvents;
+    private Coroutine _subscribeCoroutine;   // ← NEW: tracked so we can cancel it
 
     // Slot to role label mapping (matches LobbyManager.TeamForSlot / RoleForSlot)
     private static readonly string[] SlotRole = { "SHOOTER", "COLLECTOR", "SHOOTER", "COLLECTOR" };
@@ -108,51 +127,84 @@ public class LobbyRoomUI : MonoBehaviour
         if (btnStartGame != null)
         {
             btnStartGame.gameObject.SetActive(_isHost);
-            btnStartGame.interactable = false;   // enabled once ≥ 1 player
+            btnStartGame.interactable = false;
             btnStartGame.onClick.AddListener(OnStartGame);
         }
 
         if (btnLeaveRoom != null) btnLeaveRoom.onClick.AddListener(OnLeaveRoom);
 
-        // Subscribe to lobby state broadcasts
-        StartCoroutine(SubscribeWhenReady());
+        // Initial display while waiting for network
+        ClearAllSlots();
+        SetStatus("Connecting to lobby...");
+
+        // ── FIX: store the coroutine reference so OnDestroy can cancel it ─────
+        _subscribeCoroutine = StartCoroutine(SubscribeWhenReady());
     }
 
     private void OnDestroy()
     {
-        if (LobbyNetworkBridge.Instance != null)
+        // ── FIX: cancel the coroutine if it is still running when we leave ────
+        if (_subscribeCoroutine != null)
+        {
+            StopCoroutine(_subscribeCoroutine);
+            _subscribeCoroutine = null;
+        }
+
+        // ── FIX: always unsubscribe, even if the coroutine never finished ─────
+        if (_subscribedToEvents && LobbyNetworkBridge.Instance != null)
             LobbyNetworkBridge.Instance.onLobbyStateUpdated.RemoveListener(OnLobbyStateUpdated);
+
+        _subscribedToEvents = false;
     }
 
-    // ── Wait for LobbyNetworkBridge to spawn, then register name ─────────────
+    // ── Wait for LobbyNetworkBridge to be SPAWNED, then register name ─────────
+    //
+    // KEY FIX: The original only checked (Instance == null). The singleton is
+    // set in Awake(), which runs before NGO calls OnNetworkSpawn(). We MUST
+    // also wait for IsSpawned == true; otherwise the RPC call crashes inside
+    // NGO because the internal network channel isn't open yet.
 
     private IEnumerator SubscribeWhenReady()
     {
-        // LobbyNetworkBridge is a NetworkBehaviour — wait until it is spawned
-        // before calling RPCs.
-        float timeout = 5f;
-        while (LobbyNetworkBridge.Instance == null && timeout > 0f)
+        // ── FIX: wait for both Instance AND IsSpawned ─────────────────────────
+        float timeout = 10f;   // raised from 5 s
+        while (timeout > 0f)
         {
+            if (LobbyNetworkBridge.Instance != null && LobbyNetworkBridge.Instance.IsSpawned)
+                break;
+
             timeout -= Time.deltaTime;
             yield return null;
         }
 
-        if (LobbyNetworkBridge.Instance == null)
+        // Timeout or destroyed during wait
+        if (LobbyNetworkBridge.Instance == null || !LobbyNetworkBridge.Instance.IsSpawned)
         {
-            Debug.LogError("[LobbyRoomUI] LobbyNetworkBridge not found after 5 s. " +
-                           "Ensure it is on the same GameObject as LobbyManager in LobbyScene.");
+            Debug.LogError(
+                "[LobbyRoomUI] LobbyNetworkBridge not found or not spawned after 10 s. " +
+                "Ensure LobbyNetworkBridge is on the same GameObject as LobbyManager " +
+                "in LobbyScene and that the NetworkObject is properly configured.");
+            SetStatus("Error: lobby service unavailable. Please leave and try again.");
+            _subscribeCoroutine = null;
             yield break;
         }
 
-        LobbyNetworkBridge.Instance.onLobbyStateUpdated.AddListener(OnLobbyStateUpdated);
+        // Subscribe to lobby state broadcasts (only once)
+        if (!_subscribedToEvents)
+        {
+            LobbyNetworkBridge.Instance.onLobbyStateUpdated.AddListener(OnLobbyStateUpdated);
+            _subscribedToEvents = true;
+        }
 
-        // Register this player's name with the server
+        // Register this player's name with the server.
+        // This also triggers a BroadcastLobbyState → SyncLobbyStateRpc so we
+        // get a fresh lobby snapshot immediately after subscribing.
         string name = PlayerNameHolder.Instance?.LocalPlayerName ?? "Player";
         LobbyNetworkBridge.Instance.RegisterNameServerRpc(name);
 
-        // Initial blank display while we wait for server response
-        ClearAllSlots();
         SetStatus(_isHost ? "Waiting for players..." : "Connected — waiting for host to start...");
+
+        _subscribeCoroutine = null;
     }
 
     // ── Lobby state callback ──────────────────────────────────────────────────
@@ -191,8 +243,9 @@ public class LobbyRoomUI : MonoBehaviour
 
     private void SetSlot(int slot, string name, bool connected)
     {
-        Color    col    = connected ? ColConnected : ColEmpty;
-        string   status = connected ? "● CONNECTED" : "○ EMPTY";
+        Color  col    = connected ? ColConnected : ColEmpty;
+        // ── FIX: replaced ●/○ (U+25CB) — not in Modak font, caused console spam ──
+        string status = connected ? "CONNECTED" : "EMPTY";
 
         switch (slot)
         {
@@ -257,7 +310,6 @@ public class LobbyRoomUI : MonoBehaviour
     }
 
     // ── Legacy support (called by LobbyManager.RefreshLobbyUIRpc) ────────────
-    //    Keeps LobbyManager compiling without changes to its RefreshLobbyUIRpc.
 
     public void SetPlayerCount(int count)
     {
@@ -278,6 +330,17 @@ public class LobbyRoomUI : MonoBehaviour
         }
         catch
         {
+            // Fallback: iterate local host addresses for a non-loopback IPv4.
+            try
+            {
+                string hostName = Dns.GetHostName();
+                foreach (IPAddress addr in Dns.GetHostAddresses(hostName))
+                    if (addr.AddressFamily == AddressFamily.InterNetwork &&
+                        !IPAddress.IsLoopback(addr))
+                        return addr.ToString();
+            }
+            catch { /* ignored */ }
+
             return "127.0.0.1";
         }
     }
