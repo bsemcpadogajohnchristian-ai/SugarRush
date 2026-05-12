@@ -107,6 +107,14 @@ public class CollectorController : NetworkBehaviour
 
     private readonly List<Candy> _carriedCandies = new();
 
+    // ── HUD update throttle ───────────────────────────────────────────────────
+    // TickCooldowns() was firing UnityEvents every frame (~60/s per cooldown).
+    // HUDManager redraws sliders on each invoke — unnecessary CPU work every frame.
+    // Batching to HUD_TICK_RATE Hz (20 Hz) is smooth enough for any progress bar.
+    // State transitions (ability start/end, charges change) still fire instantly.
+    private float _hudTick;
+    private const float HUD_TICK_RATE = 0.05f; // 20 Hz
+
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     private void Awake()
@@ -390,20 +398,37 @@ public class CollectorController : NetworkBehaviour
     }
 
     // ── Cooldown ticks ────────────────────────────────────────────────────────
+    //
+    // FIX: Previously every cooldown fired a UnityEvent every frame (~60/s).
+    // HUDManager updates a UI slider on each invoke — at 4 concurrent cooldowns
+    // that is 240 unnecessary UI redraws/second causing visible CPU lag.
+    //
+    // Fix: tick timers every frame for accuracy, but push values to HUD only
+    // at HUD_TICK_RATE (20 Hz). State transitions (ready, charges refilled)
+    // still fire immediately so the HUD never feels unresponsive.
 
     private void TickCooldowns()
     {
+        _hudTick -= Time.deltaTime;
+        bool pushHud = _hudTick <= 0f;
+        if (pushHud) _hudTick = HUD_TICK_RATE;
+
+        // ── Super Speed ───────────────────────────────────────────────────────
         if (_superSpeedTimer > 0f)
         {
             _superSpeedTimer -= Time.deltaTime;
-            onSuperSpeedCooldown?.Invoke(Mathf.Max(_superSpeedTimer, 0f));
+            if (_superSpeedTimer <= 0f)
+            {
+                _superSpeedTimer = 0f;
+                onSuperSpeedCooldown?.Invoke(0f);
+            }
+            else if (pushHud) onSuperSpeedCooldown?.Invoke(_superSpeedTimer);
         }
 
+        // ── Decoy window ──────────────────────────────────────────────────────
         if (_inDecoyWindow)
         {
             _decoyWindowTimer -= Time.deltaTime;
-            onDecoyWindow?.Invoke(Mathf.Max(_decoyWindowTimer, 0f));
-
             if (_decoyWindowTimer <= 0f)
             {
                 _inDecoyWindow    = false;
@@ -411,13 +436,13 @@ public class CollectorController : NetworkBehaviour
                 _decoyTimer       = decoyCooldown;
                 onDecoyWindow?.Invoke(0f);
             }
+            else if (pushHud) onDecoyWindow?.Invoke(_decoyWindowTimer);
         }
 
+        // ── Decoy cooldown ────────────────────────────────────────────────────
         if (_decoyTimer > 0f)
         {
             _decoyTimer -= Time.deltaTime;
-            onDecoyCooldown?.Invoke(Mathf.Max(_decoyTimer, 0f));
-
             if (_decoyTimer <= 0f)
             {
                 _decoyTimer   = 0f;
@@ -425,19 +450,19 @@ public class CollectorController : NetworkBehaviour
                 onDecoyCooldown?.Invoke(0f);
                 onDecoyChargesChanged?.Invoke(_decoyCharges);
             }
+            else if (pushHud) onDecoyCooldown?.Invoke(_decoyTimer);
         }
 
         // ── Magnet cooldown ───────────────────────────────────────────────────
         if (_magnetCooldownTimer > 0f)
         {
             _magnetCooldownTimer -= Time.deltaTime;
-            onMagnetCooldown?.Invoke(Mathf.Max(_magnetCooldownTimer, 0f));
-
             if (_magnetCooldownTimer <= 0f)
             {
                 _magnetCooldownTimer = 0f;
                 onMagnetCooldown?.Invoke(0f);
             }
+            else if (pushHud) onMagnetCooldown?.Invoke(_magnetCooldownTimer);
         }
     }
 

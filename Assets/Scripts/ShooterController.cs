@@ -85,6 +85,12 @@ public class ShooterController : NetworkBehaviour
     private float _smokeTimer;
     // ─────────────────────────────────────────────────────────────────────────
 
+    // ── HUD throttle (Cause 2 lag fix) ────────────────────────────────────────
+    // TickSmokeCooldown was calling onSmokeGrenadeCooldown every frame (~60/s).
+    // Throttled to 20 Hz — same fix as CollectorController.TickCooldowns().
+    private float _smokeHudTick;
+    private const float SMOKE_HUD_RATE = 0.05f; // 20 Hz
+
     public int CurrentWeaponIndex => _currentIndex;
 
     private void Awake() => _stats = GetComponent<PlayerStats>();
@@ -238,14 +244,24 @@ public class ShooterController : NetworkBehaviour
         if (_smokeTimer <= 0f) return;
 
         _smokeTimer -= Time.deltaTime;
-        onSmokeGrenadeCooldown?.Invoke(Mathf.Max(_smokeTimer, 0f));
 
         if (_smokeTimer <= 0f)
         {
+            // Cooldown finished — fire transition events immediately
             _smokeTimer   = 0f;
             _smokeCharges = smokeMaxCharges;
             onSmokeGrenadeCooldown?.Invoke(0f);
             onSmokeChargesChanged?.Invoke(_smokeCharges);
+            _smokeHudTick = 0f;
+            return;
+        }
+
+        // FIX: throttle HUD push to 20 Hz — was firing every frame (~60/s)
+        _smokeHudTick -= Time.deltaTime;
+        if (_smokeHudTick <= 0f)
+        {
+            _smokeHudTick = SMOKE_HUD_RATE;
+            onSmokeGrenadeCooldown?.Invoke(_smokeTimer);
         }
     }
 

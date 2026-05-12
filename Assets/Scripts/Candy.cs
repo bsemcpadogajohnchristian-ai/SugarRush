@@ -28,6 +28,13 @@ public class Candy : NetworkBehaviour
     private Renderer  _rend;
     private Coroutine _despawnRoutine;
 
+    // ── Carrier cache (lag fix) ───────────────────────────────────────────────
+    // The original Update() called NetworkManager.SpawnManager.SpawnedObjects
+    // .TryGetValue() every frame per candy — a dictionary lookup inside the
+    // NGO spawn table. With 10 carried candies that is 600 lookups/second.
+    // Fix: cache the carrier's Transform when carrierId changes; clear on drop.
+    private Transform _carrierTransform;
+
     private void Awake()
     {
         _col  = GetComponent<Collider>();
@@ -46,6 +53,19 @@ public class Candy : NetworkBehaviour
         bool startOnGround   = state.Value == CandyState.OnGround;
         _col.enabled         = startOnGround;
         if (_rend) _rend.enabled = startOnGround;
+
+        // Cache carrier transform whenever carrierId changes — avoids per-frame
+        // SpawnedObjects dictionary lookup in Update().
+        carrierId.OnValueChanged += (_, newId) =>
+        {
+            if (newId == 0 || state.Value != CandyState.Carried)
+            {
+                _carrierTransform = null;
+                return;
+            }
+            if (NetworkManager.SpawnManager.SpawnedObjects.TryGetValue(newId, out var obj))
+                _carrierTransform = obj.transform;
+        };
     }
 
     private void Update()
@@ -58,12 +78,18 @@ public class Candy : NetworkBehaviour
         }
         else if (state.Value == CandyState.Carried)
         {
-            if (NetworkManager.SpawnManager.SpawnedObjects.TryGetValue(carrierId.Value, out var obj))
+            // FIX: use cached _carrierTransform instead of SpawnedObjects lookup every frame
+            if (_carrierTransform != null)
             {
                 int idx = slotIndex.Value;
-                transform.position = obj.transform.position
+                transform.position = _carrierTransform.position
                     + Vector3.up * (1.5f + idx * 0.25f)
-                    + obj.transform.right * (idx * 0.3f - 1f);
+                    + _carrierTransform.right * (idx * 0.3f - 1f);
+            }
+            else if (NetworkManager.SpawnManager.SpawnedObjects.TryGetValue(carrierId.Value, out var obj))
+            {
+                // Fallback: cache was not set yet (e.g. late join) — populate now
+                _carrierTransform = obj.transform;
             }
         }
     }
