@@ -6,8 +6,8 @@ TerrainLayer:
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_Name: NewLayer
-  m_DiffuseTexture: {fileID: 2800000, guid: 4699d278406134f4493e833c21e6fdb4, type: 3}
+  m_Name: Pink
+  m_DiffuseTexture: {fileID: 2800000, guid: b9e1a4b587d5d1d46bd6e2b8b8b342b5, type: 3}
   m_NormalMapTexture: {fileID: 0}
   m_MaskMapTexture: {fileID: 0}
   m_TileSize: {x: 2, y: 2}
