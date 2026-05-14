@@ -11,6 +11,7 @@
 // ── SMOKE GRENADE MIGRATION (previous change, unchanged) ─────────────────────
 //   smokeThrowSequence NetworkVariable added.
 
+using Unity.Collections;
 using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.Events;
@@ -59,6 +60,13 @@ public class PlayerStats : NetworkBehaviour
 
     public NetworkVariable<bool> isScopedNV = new(false,
         NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Owner);
+
+    // ── Display name (set by LobbyManager from registered menu name) ─────────
+
+    public NetworkVariable<FixedString64Bytes> playerName = new(
+        new FixedString64Bytes("Player"),
+        NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server);
 
     // ── Locomotion animation NVs ──────────────────────────────────────────────
 
@@ -138,10 +146,12 @@ public class PlayerStats : NetworkBehaviour
 
     /// <summary>
     /// Generic damage — no kill attribution.
-    /// Kill feed will show "Unknown" as the killer (e.g. fall damage sources).
+    /// Kill feed will show "World" as the killer (e.g. fall damage, environment).
+    /// ulong.MaxValue is the sentinel for "no player killer" — avoids colliding
+    /// with the host's real ClientId which is 0 in NGO host mode.
     /// </summary>
     public void TakeDamage(float damage)
-        => TakeDamageFrom(damage, 0, "Unknown");
+        => TakeDamageFrom(damage, ulong.MaxValue, "World");
 
     /// <summary>
     /// Damage with full kill attribution — always prefer this from weapons.
@@ -151,7 +161,7 @@ public class PlayerStats : NetworkBehaviour
         if (!IsServer || isDead.Value) return;
 
         // ── RESULT SCREEN CHANGE: track damage dealt on the attacker ──────────
-        if (killerId != 0)
+        if (killerId != ulong.MaxValue)
         {
             PlayerStats attacker = NetworkGameManager.Instance?.FindPlayerByClientId(killerId);
             attacker?.GetComponent<PlayerMatchStats>()?.AddDamage(damage);
@@ -201,8 +211,14 @@ public class PlayerStats : NetworkBehaviour
 
     public string GetDisplayName()
     {
-        string t = team.Value == TeamID.TeamA ? "TeamA" : "TeamB";
-        string r = role.Value == PlayerRole.Shooter ? "Shooter" : "Collector";
-        return $"[{t}] {r}";
+        string name = playerName.Value.ToString();
+        // Fall back to role/team label if the name was never set
+        if (string.IsNullOrWhiteSpace(name) || name == "Player")
+        {
+            string t = team.Value == TeamID.TeamA ? "TeamA" : "TeamB";
+            string r = role.Value == PlayerRole.Shooter ? "Shooter" : "Collector";
+            return $"[{t}] {r}";
+        }
+        return name;
     }
 }

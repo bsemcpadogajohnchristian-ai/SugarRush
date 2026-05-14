@@ -254,8 +254,10 @@ public class NetworkGameManager : NetworkBehaviour
     {
         if (!IsServer) return;
 
-        // Increment killer's kill counter
-        if (killerId != 0)
+        // ── Increment killer's kill counter ───────────────────────────────────
+        // ulong.MaxValue is the "no player killer" sentinel (environment/world).
+        // killerId == 0 is NOT safe to use here because the host's ClientId is 0.
+        if (killerId != ulong.MaxValue)
         {
             PlayerStats killer = FindPlayerByClientId(killerId);
             killer?.GetComponent<PlayerMatchStats>()?.AddKill();
@@ -268,7 +270,7 @@ public class NetworkGameManager : NetworkBehaviour
         string killerLabel;
         TeamID killerTeam;
 
-        if (killerId == 0)
+        if (killerId == ulong.MaxValue)
         {
             killerLabel = "World";
             killerTeam  = TeamID.TeamA;

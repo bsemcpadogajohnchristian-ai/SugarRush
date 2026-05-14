@@ -232,6 +232,10 @@ public class LobbyManager : NetworkBehaviour
                 ps.team.Value      = team;
                 ps.currentHP.Value = role == PlayerRole.Shooter
                     ? ps.shooterMaxHP : ps.collectorMaxHP;
+
+                // ── Set the registered display name from the lobby ────────────
+                string registeredName = LobbyNetworkBridge.Instance?.GetPlayerName(clientId) ?? "Player";
+                ps.playerName.Value = new Unity.Collections.FixedString64Bytes(registeredName);
             }
 
             no.SpawnAsPlayerObject(clientId, true);
