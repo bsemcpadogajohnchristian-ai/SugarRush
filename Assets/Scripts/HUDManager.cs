@@ -503,7 +503,7 @@ public class HUDManager : MonoBehaviour
 
     private void UpdateCandyCount(int count)
     {
-        if (candyCountText) candyCountText.text = $"Carrying: {count}";
+        if (candyCountText) candyCountText.text = $"Candy: {count}";
     }
 
     // ══════════════════════════════════════════════════════════════════════════

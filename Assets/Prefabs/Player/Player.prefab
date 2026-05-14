@@ -501,9 +501,9 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::ShotgunWeapon
   ShowTopMostFoldoutHeaderGroup: 1
-  weaponName: Weapon
+  weaponName: Shotgun
   isAutomatic: 0
-  weaponIcon: {fileID: 21300000, guid: 1fa410361e8fb3a4a9a9983ec05698d4, type: 3}
+  weaponIcon: {fileID: 21300000, guid: b35f0be4c9fd08c4fa3b7e6581540794, type: 3}
   damage: 25
   fireRate: 0.2
   range: 100
@@ -890,9 +890,9 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::BazookaWeapon
   ShowTopMostFoldoutHeaderGroup: 1
-  weaponName: Weapon
+  weaponName: Bazooka
   isAutomatic: 0
-  weaponIcon: {fileID: 21300000, guid: 11222d7b47644484cb1b92df323989cf, type: 3}
+  weaponIcon: {fileID: 21300000, guid: ceb9933086ae4fb4ab3556c67f0ff904, type: 3}
   damage: 25
   fireRate: 0.2
   range: 100
@@ -1594,9 +1594,9 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::SniperWeapon
   ShowTopMostFoldoutHeaderGroup: 1
-  weaponName: Weapon
+  weaponName: Sniper
   isAutomatic: 0
-  weaponIcon: {fileID: 21300000, guid: 747a3172a5d05bc4a9fa045bf32cc3be, type: 3}
+  weaponIcon: {fileID: 21300000, guid: c3ffea6c903366b4e924248d17015ac5, type: 3}
   damage: 25
   fireRate: 0.2
   range: 100
@@ -1937,6 +1937,75 @@ MonoBehaviour:
     m_InternalValue: 0
   isScopedNV:
     m_InternalValue: 0
+  playerName:
+    m_InternalValue:
+      utf8LengthInBytes: 6
+      bytes:
+        offset0000:
+          byte0000: 80
+          byte0001: 108
+          byte0002: 97
+          byte0003: 121
+          byte0004: 101
+          byte0005: 114
+          byte0006: 0
+          byte0007: 0
+          byte0008: 0
+          byte0009: 0
+          byte0010: 0
+          byte0011: 0
+          byte0012: 0
+          byte0013: 0
+          byte0014: 0
+          byte0015: 0
+        offset0016:
+          byte0000: 0
+          byte0001: 0
+          byte0002: 0
+          byte0003: 0
+          byte0004: 0
+          byte0005: 0
+          byte0006: 0
+          byte0007: 0
+          byte0008: 0
+          byte0009: 0
+          byte0010: 0
+          byte0011: 0
+          byte0012: 0
+          byte0013: 0
+          byte0014: 0
+          byte0015: 0
+        offset0032:
+          byte0000: 0
+          byte0001: 0
+          byte0002: 0
+          byte0003: 0
+          byte0004: 0
+          byte0005: 0
+          byte0006: 0
+          byte0007: 0
+          byte0008: 0
+          byte0009: 0
+          byte0010: 0
+          byte0011: 0
+          byte0012: 0
+          byte0013: 0
+          byte0014: 0
+          byte0015: 0
+        byte0048: 0
+        byte0049: 0
+        byte0050: 0
+        byte0051: 0
+        byte0052: 0
+        byte0053: 0
+        byte0054: 0
+        byte0055: 0
+        byte0056: 0
+        byte0057: 0
+        byte0058: 0
+        byte0059: 0
+        byte0060: 0
+        byte0061: 0
   isMovingNV:
     m_InternalValue: 0
   localMoveDir:
@@ -2306,9 +2375,9 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::RifleWeapon
   ShowTopMostFoldoutHeaderGroup: 1
-  weaponName: Weapon
+  weaponName: Rifle
   isAutomatic: 1
-  weaponIcon: {fileID: 21300000, guid: 96cbc71d62b140846b972e32fdbb7e00, type: 3}
+  weaponIcon: {fileID: 21300000, guid: 74d5556bf0f838a41b5739d66235e5c6, type: 3}
   damage: 25
   fireRate: 0.2
   range: 100
