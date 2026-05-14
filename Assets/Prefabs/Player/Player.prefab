@@ -1995,6 +1995,7 @@ MonoBehaviour:
   playerCamera: {fileID: 7006218217850837159}
   defaultFOV: 70
   scopedFOV: 30
+  fpShooterArmsRoot: {fileID: 7974027672282308718}
   smokeGrenadePrefab: {fileID: 8433499525629148457, guid: 58965c8d87bbdbf44b2f35578d19d0a1,
     type: 3}
   smokeThrowForce: 14

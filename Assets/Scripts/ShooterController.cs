@@ -46,6 +46,12 @@ public class ShooterController : NetworkBehaviour
     public float  defaultFOV = 70f;
     public float  scopedFOV  = 30f;
 
+    [Header("Scope — FP Arms Hiding")]
+    [Tooltip("Drag fpShooterArms here. All Renderers inside are hidden while scoped " +
+             "so the weapon model doesn't overlap the scope overlay. " +
+             "Scripts on the object keep running — only visuals are toggled.")]
+    public GameObject fpShooterArmsRoot;
+
     // ── NEW: Smoke Grenade ────────────────────────────────────────────────────
     [Header("Smoke Grenade")]
     [Tooltip("Drag your SmokeGrenade prefab here.")]
@@ -314,7 +320,22 @@ public class ShooterController : NetworkBehaviour
             onScopeChanged?.Invoke(_isScoped);
             _prevScoped = _isScoped;
             if (_stats != null) _stats.isScopedNV.Value = _isScoped;
+
+            // FIX: hide the FP arms so the weapon mesh doesn't show over the scope overlay.
+            // Only Renderers are toggled — scripts on fpShooterArmsRoot keep running normally.
+            SetFPArmsVisible(!_isScoped);
         }
+    }
+
+    /// <summary>
+    /// Toggles all Renderers under fpShooterArmsRoot without deactivating the
+    /// GameObject, so weapon scripts (firing, reloading, etc.) keep running.
+    /// </summary>
+    private void SetFPArmsVisible(bool visible)
+    {
+        if (fpShooterArmsRoot == null) return;
+        foreach (Renderer r in fpShooterArmsRoot.GetComponentsInChildren<Renderer>(includeInactive: true))
+            r.enabled = visible;
     }
 
     private IEnumerator SmoothFOV(float target)
@@ -385,7 +406,7 @@ public class ShooterController : NetworkBehaviour
             _stats.equippedWeaponIndex.Value = _currentIndex;
         }
 
-        if (_isScoped) { _isScoped = false; _prevScoped = false; playerCamera.fieldOfView = defaultFOV; }
+        if (_isScoped) { _isScoped = false; _prevScoped = false; playerCamera.fieldOfView = defaultFOV; SetFPArmsVisible(true); }
 
         onWeaponEquipped?.Invoke(_currentIndex);
         HUDManager.Instance?.NotifyWeaponChanged(index);

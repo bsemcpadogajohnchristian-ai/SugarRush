@@ -1,5 +1,15 @@
 // HUDManager.cs — Sugar Rush
 //
+// ── SNIPER SCOPE OVERLAY ADDED ────────────────────────────────────────────────
+//   • New Inspector field: scopeOverlayPanel (GameObject).
+//     Assign the full-screen scope PNG Image GameObject here.
+//   • New public method: SetScopeOverlay(bool) — shows/hides the scope panel
+//     and also hides ammoPanel + smokeGrenadePanel for a clean scoped view.
+//   • ResetAndInitialize() now subscribes sc.onScopeChanged → OnScopeChanged
+//     when the local player is a Shooter.
+//   • Cleanup() now unsubscribes onScopeChanged and clears the overlay.
+//   • SetScopeOverlay(false) is called in Start() so the overlay always starts hidden.
+//
 // ── ALL 3 SKILL SLOTS UNIFIED ─────────────────────────────────────────────────
 //   Magnet, Super Speed, and Decoy now all share the SAME abilityPanel.
 //   The old separate magnetPanel field has been removed — SkillSlot_Magnet
@@ -124,6 +134,18 @@ public class HUDManager : MonoBehaviour
     [Tooltip("Full-screen Image shown when the local player is inside a smoke cloud.")]
     public GameObject smokeOverlayPanel;
 
+    [Header("Scope Overlay (Shooter — Sniper)")]
+    [Tooltip("Full-screen panel shown when the local Sniper player is scoped in. " +
+             "Create a Canvas Image using the scope_overlay.png sprite, stretched to fill screen, " +
+             "then drag that Image's parent GameObject here.")]
+    public GameObject scopeOverlayPanel;
+
+    [Tooltip("Seconds to wait after scoping before the overlay appears. " +
+             "Match this to your FOV zoom-in duration so the overlay fades in after the zoom. " +
+             "Set to 0 for instant. Default 0.15 s works well with the built-in SmoothFOV.")]
+    [Range(0f, 1f)]
+    public float scopeOverlayDelay = 0.15f;
+
     [Header("Notifications")]
     public TextMeshProUGUI notificationText;
 
@@ -146,6 +168,7 @@ public class HUDManager : MonoBehaviour
     private float               _decoyMax      = 20f;
     private float               _smokeMax      = 25f;
     private float               _magnetMax     = 25f;
+    private Coroutine           _scopeOverlayCoroutine; // tracks the show-overlay delay
 
     // Skill state cache
     private float _superSpeedCD;
@@ -168,6 +191,7 @@ public class HUDManager : MonoBehaviour
         SetInventoryVisible(false);
 
         if (smokeOverlayPanel     != null) smokeOverlayPanel.SetActive(false);
+        if (scopeOverlayPanel     != null) scopeOverlayPanel.SetActive(false);
         if (smokeGrenadePanel     != null) smokeGrenadePanel.SetActive(false);
         if (magnetActiveIndicator != null) magnetActiveIndicator.SetActive(false);
         // NOTE: abilityPanel visibility is set in ResetAndInitialize — not here.
@@ -213,9 +237,11 @@ public class HUDManager : MonoBehaviour
 
                 sc.onSmokeGrenadeCooldown.AddListener(UpdateSmokeCooldown);
                 sc.onSmokeChargesChanged.AddListener(UpdateSmokeCharges);
+                sc.onScopeChanged.AddListener(OnScopeChanged);   // ← NEW
 
                 UpdateSmokeCooldown(0f);
                 UpdateSmokeCharges(sc.smokeMaxCharges);
+                SetScopeOverlay(false);                           // ← NEW: ensure hidden on init
             }
         }
         else
@@ -378,6 +404,13 @@ public class HUDManager : MonoBehaviour
         StopAllCoroutines();
         _ngmWired = false;
 
+        // Cancel any pending scope overlay delay.
+        if (_scopeOverlayCoroutine != null)
+        {
+            StopCoroutine(_scopeOverlayCoroutine);
+            _scopeOverlayCoroutine = null;
+        }
+
         if (_player != null)
             _player.onHealthChanged.RemoveListener(UpdateHealth);
 
@@ -406,8 +439,11 @@ public class HUDManager : MonoBehaviour
         {
             _trackedShooterForSmoke.onSmokeGrenadeCooldown.RemoveListener(UpdateSmokeCooldown);
             _trackedShooterForSmoke.onSmokeChargesChanged.RemoveListener(UpdateSmokeCharges);
+            _trackedShooterForSmoke.onScopeChanged.RemoveListener(OnScopeChanged); // ← NEW
             _trackedShooterForSmoke = null;
         }
+
+        SetScopeOverlay(false); // ← NEW: always clear on cleanup (respawn, role change)
 
         NetworkGameManager ngm = NetworkGameManager.Instance;
         if (ngm != null)
@@ -623,6 +659,51 @@ public class HUDManager : MonoBehaviour
     {
         if (smokeOverlayPanel != null)
             smokeOverlayPanel.SetActive(isInside);
+    }
+
+    // ── SCOPE OVERLAY (Sniper) ────────────────────────────────────────────────
+
+    /// <summary>
+    /// Subscribed to ShooterController.onScopeChanged.
+    /// When scoping IN:  waits scopeOverlayDelay seconds before showing the overlay,
+    ///                   so it appears after the FOV zoom animation finishes.
+    /// When scoping OUT: cancels any pending delay and hides the overlay immediately.
+    /// </summary>
+    private void OnScopeChanged(bool scoped)
+    {
+        // Always cancel an in-flight delay first.
+        if (_scopeOverlayCoroutine != null)
+        {
+            StopCoroutine(_scopeOverlayCoroutine);
+            _scopeOverlayCoroutine = null;
+        }
+
+        if (scoped && scopeOverlayDelay > 0f)
+            _scopeOverlayCoroutine = StartCoroutine(ShowScopeOverlayDelayed());
+        else
+            SetScopeOverlay(scoped);
+    }
+
+    private IEnumerator ShowScopeOverlayDelayed()
+    {
+        yield return new WaitForSeconds(scopeOverlayDelay);
+        SetScopeOverlay(true);
+        _scopeOverlayCoroutine = null;
+    }
+
+    /// <summary>
+    /// Shows or hides the full-screen scope PNG overlay.
+    /// Also hides/restores the ammo and smoke-grenade HUD panels so the
+    /// scoped view is clean — only the scope graphic is visible.
+    /// </summary>
+    public void SetScopeOverlay(bool isScoped)
+    {
+        if (scopeOverlayPanel != null)
+            scopeOverlayPanel.SetActive(isScoped);
+
+        // Hide other shooter HUD elements while scoped for a clean view
+        if (ammoPanel         != null) ammoPanel.SetActive(!isScoped);
+        if (smokeGrenadePanel != null) smokeGrenadePanel.SetActive(!isScoped);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
