@@ -1,23 +1,20 @@
 // CollectorController.cs — Sugar Rush
 //
-// ── RESULT SCREEN CHANGE ──────────────────────────────────────────────────────
-//   DeliverCandiesServer() now calls PlayerMatchStats.AddCandies(count) so the
-//   Result Screen can show how many candies this Collector delivered.
+// ── PAUSE GUARD ADDED ─────────────────────────────────────────────────────────
+//   BUG: Left-click candy pickup and all ability inputs (E / Q / R) remained
+//   active while PauseMenuUI was open. PlayerController already blocked its
+//   Update(), but CollectorController had no matching guard.
 //
-// ── MAGNET ABILITY ADDED ──────────────────────────────────────────────────────
-//   New ability: press R to activate a candy magnet for magnetDuration seconds.
-//   While active, the nearest on-ground candy within magnetRadius is auto-picked
-//   up every magnetPickupRate seconds (up to maxCarryCapacity).
-//   After the duration expires, a magnetCooldown countdown begins.
+//   FIX: Added `if (PauseMenuUI.IsPaused) return;` at the top of Update(),
+//   immediately after the existing IsOwner / IsDead guard.
+//   Blocks HandlePickup(), HandleSuperSpeed(), HandleDecoy(), HandleMagnet(),
+//   and TickCooldowns() while the pause overlay is visible.
+//   No gameplay logic is changed.
 //
-// ── SKILL BAR HUD CHANGE ─────────────────────────────────────────────────────
-//   Added onSuperSpeedActiveChanged UnityEvent<bool> so HUDManager can switch
-//   the Super Speed bar to "active" (pink, full) while the ability is running,
-//   then back to "cooldown" (grey, filling) after it expires.
-//   Previously the HUD had no way to know when Super Speed was active vs ready.
+//   PauseMenuUI runs at [DefaultExecutionOrder(-100)], CollectorController at
+//   the default (0), so IsPaused is already set before this script reads it.
 //
-//   NEW FIELD:
-//     • onSuperSpeedActiveChanged  UnityEvent<bool>  — fired in SuperSpeedRoutine
+// ── ALL OTHER CHANGES ARE UNCHANGED FROM PREVIOUS VERSION ────────────────────
 
 using System.Collections;
 using System.Collections.Generic;
@@ -56,13 +53,13 @@ public class CollectorController : NetworkBehaviour
     public float magnetPickupRate = 0.25f;
 
     [Header("HUD events")]
-    public UnityEvent<int>   onCandyCountChanged   = new();
-    public UnityEvent<float> onSuperSpeedCooldown  = new();
-    public UnityEvent<bool>  onSuperSpeedActiveChanged = new(); // ← NEW: drives HUD active state
-    public UnityEvent<float> onDecoyCooldown       = new();
-    public UnityEvent<int>   onDecoyChargesChanged = new();
-    public UnityEvent<float> onDecoyWindow         = new();
-    public UnityEvent        onDecoyFired          = new();
+    public UnityEvent<int>   onCandyCountChanged      = new();
+    public UnityEvent<float> onSuperSpeedCooldown      = new();
+    public UnityEvent<bool>  onSuperSpeedActiveChanged = new();
+    public UnityEvent<float> onDecoyCooldown           = new();
+    public UnityEvent<int>   onDecoyChargesChanged     = new();
+    public UnityEvent<float> onDecoyWindow             = new();
+    public UnityEvent        onDecoyFired              = new();
 
     // ── Magnet HUD / animation events ─────────────────────────────────────────
     /// <summary>Remaining cooldown seconds — 0 when ready. Drives HUD fill.</summary>
@@ -108,10 +105,6 @@ public class CollectorController : NetworkBehaviour
     private readonly List<Candy> _carriedCandies = new();
 
     // ── HUD update throttle ───────────────────────────────────────────────────
-    // TickCooldowns() was firing UnityEvents every frame (~60/s per cooldown).
-    // HUDManager redraws sliders on each invoke — unnecessary CPU work every frame.
-    // Batching to HUD_TICK_RATE Hz (20 Hz) is smooth enough for any progress bar.
-    // State transitions (ability start/end, charges change) still fire instantly.
     private float _hudTick;
     private const float HUD_TICK_RATE = 0.05f; // 20 Hz
 
@@ -141,6 +134,12 @@ public class CollectorController : NetworkBehaviour
     private void Update()
     {
         if (!IsOwner || _stats.IsDead()) return;
+
+        // ── FIX: block all input while the pause overlay is open ──────────────
+        // PauseMenuUI runs at [DefaultExecutionOrder(-100)] so IsPaused is
+        // already set before this script's default-order Update() reads it.
+        if (PauseMenuUI.IsPaused) return;
+
         HandlePickup();
         HandleSuperSpeed();
         HandleDecoy();
@@ -218,7 +217,7 @@ public class CollectorController : NetworkBehaviour
         _carriedCandies.Clear();
         carriedCount.Value = 0;
         NetworkGameManager.Instance?.AddScore(scoringTeam, count);
-        GetComponent<PlayerMatchStats>()?.AddCandies(count);   // ← RESULT SCREEN
+        GetComponent<PlayerMatchStats>()?.AddCandies(count);
     }
 
     // ── Candy count change ────────────────────────────────────────────────────
@@ -244,8 +243,6 @@ public class CollectorController : NetworkBehaviour
         _superSpeedActive      = true;
         superSpeedActive.Value = true;
         _pc.speedMultiplier    = _currentPenalty * superSpeedMultiplier;
-
-        // ── NEW: notify HUD that super speed is now active ─────────────────
         onSuperSpeedActiveChanged?.Invoke(true);
 
         yield return new WaitForSeconds(superSpeedDuration);
@@ -254,8 +251,6 @@ public class CollectorController : NetworkBehaviour
         _superSpeedActive      = false;
         superSpeedActive.Value = false;
         _superSpeedTimer       = superSpeedCooldown;
-
-        // ── NEW: notify HUD that super speed ended, cooldown begins ────────
         onSuperSpeedActiveChanged?.Invoke(false);
     }
 
@@ -398,14 +393,6 @@ public class CollectorController : NetworkBehaviour
     }
 
     // ── Cooldown ticks ────────────────────────────────────────────────────────
-    //
-    // FIX: Previously every cooldown fired a UnityEvent every frame (~60/s).
-    // HUDManager updates a UI slider on each invoke — at 4 concurrent cooldowns
-    // that is 240 unnecessary UI redraws/second causing visible CPU lag.
-    //
-    // Fix: tick timers every frame for accuracy, but push values to HUD only
-    // at HUD_TICK_RATE (20 Hz). State transitions (ready, charges refilled)
-    // still fire immediately so the HUD never feels unresponsive.
 
     private void TickCooldowns()
     {
@@ -413,7 +400,7 @@ public class CollectorController : NetworkBehaviour
         bool pushHud = _hudTick <= 0f;
         if (pushHud) _hudTick = HUD_TICK_RATE;
 
-        // ── Super Speed ───────────────────────────────────────────────────────
+        // Super Speed
         if (_superSpeedTimer > 0f)
         {
             _superSpeedTimer -= Time.deltaTime;
@@ -425,7 +412,7 @@ public class CollectorController : NetworkBehaviour
             else if (pushHud) onSuperSpeedCooldown?.Invoke(_superSpeedTimer);
         }
 
-        // ── Decoy window ──────────────────────────────────────────────────────
+        // Decoy window
         if (_inDecoyWindow)
         {
             _decoyWindowTimer -= Time.deltaTime;
@@ -439,7 +426,7 @@ public class CollectorController : NetworkBehaviour
             else if (pushHud) onDecoyWindow?.Invoke(_decoyWindowTimer);
         }
 
-        // ── Decoy cooldown ────────────────────────────────────────────────────
+        // Decoy cooldown
         if (_decoyTimer > 0f)
         {
             _decoyTimer -= Time.deltaTime;
@@ -453,7 +440,7 @@ public class CollectorController : NetworkBehaviour
             else if (pushHud) onDecoyCooldown?.Invoke(_decoyTimer);
         }
 
-        // ── Magnet cooldown ───────────────────────────────────────────────────
+        // Magnet cooldown
         if (_magnetCooldownTimer > 0f)
         {
             _magnetCooldownTimer -= Time.deltaTime;

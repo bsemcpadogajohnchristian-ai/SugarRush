@@ -1,26 +1,21 @@
 // ShooterController.cs — Sugar Rush
 //
-// ── SMOKE GRENADE ADDED ───────────────────────────────────────────────────────
-//   The smoke grenade ability has been moved FROM CollectorController TO here.
-//   Press Alpha4 to throw a smoke grenade toward wherever the camera is aimed.
+// ── PAUSE GUARD ADDED ─────────────────────────────────────────────────────────
+//   BUG: Mouse-button fire input was processed even while PauseMenuUI was open
+//   because ShooterController.Update() had no IsPaused check, unlike
+//   PlayerController which already guarded its Update() correctly.
 //
-//   New Inspector fields (Smoke Grenade header):
-//     smokeGrenadePrefab    — drag your SmokeGrenade prefab
-//     smokeThrowForce       — forward throw speed (m/s)
-//     smokeThrowArc         — upward arc component
-//     smokeMaxCharges       — charges before cooldown kicks in
-//     smokeGrenadeCooldown  — seconds to recharge both charges
+//   FIX: Added `if (PauseMenuUI.IsPaused) return;` at the top of Update(),
+//   immediately after the existing IsOwner / IsDead guard.
+//   This blocks HandleFire(), HandleScope(), HandleReload(), HandleInventory(),
+//   HandleSmokeGrenade(), and TickSmokeCooldown() — all input-driven paths —
+//   while the pause overlay is visible. No gameplay logic is changed.
 //
-//   New events:
-//     onSmokeGrenadeFired     — fires locally on throw (used by FPShooterAnimator)
-//     onSmokeGrenadeCooldown  — float, remaining cooldown seconds (used by HUDManager)
-//     onSmokeChargesChanged   — int, current charges (used by HUDManager)
+//   PauseMenuUI runs at [DefaultExecutionOrder(-100)], ShooterController at the
+//   default (0), so IsPaused is already set before this script's Update() reads
+//   it — no single-frame race condition.
 //
-//   New NV:
-//     PlayerStats.smokeThrowSequence — incremented per throw so ShooterAnimator
-//     can fire the "ThrowSmoke" trigger on ALL clients (3P animation).
-//
-//   All existing FP/3P weapon architecture is unchanged.
+// ── SMOKE GRENADE (unchanged from previous version) ───────────────────────────
 
 using System.Collections;
 using System.Collections.Generic;
@@ -52,7 +47,6 @@ public class ShooterController : NetworkBehaviour
              "Scripts on the object keep running — only visuals are toggled.")]
     public GameObject fpShooterArmsRoot;
 
-    // ── NEW: Smoke Grenade ────────────────────────────────────────────────────
     [Header("Smoke Grenade")]
     [Tooltip("Drag your SmokeGrenade prefab here.")]
     public GameObject smokeGrenadePrefab;
@@ -69,11 +63,9 @@ public class ShooterController : NetworkBehaviour
     [Tooltip("Seconds to recharge all charges after they are spent.")]
     public float smokeGrenadeCooldown = 25f;
 
-    // ── NEW: Smoke events (consumed by FPShooterAnimator and HUDManager) ─────
     public UnityEvent        onSmokeGrenadeFired    = new();
     public UnityEvent<float> onSmokeGrenadeCooldown = new();
     public UnityEvent<int>   onSmokeChargesChanged  = new();
-    // ─────────────────────────────────────────────────────────────────────────
 
     public UnityEvent<int>  onWeaponEquipped = new();
     public UnityEvent<bool> onScopeChanged   = new();
@@ -86,14 +78,9 @@ public class ShooterController : NetworkBehaviour
     private bool        _inSwapZone;
     private PlayerStats _stats;
 
-    // ── NEW: Smoke state ──────────────────────────────────────────────────────
     private int   _smokeCharges;
     private float _smokeTimer;
-    // ─────────────────────────────────────────────────────────────────────────
 
-    // ── HUD throttle (Cause 2 lag fix) ────────────────────────────────────────
-    // TickSmokeCooldown was calling onSmokeGrenadeCooldown every frame (~60/s).
-    // Throttled to 20 Hz — same fix as CollectorController.TickCooldowns().
     private float _smokeHudTick;
     private const float SMOKE_HUD_RATE = 0.05f; // 20 Hz
 
@@ -111,9 +98,7 @@ public class ShooterController : NetworkBehaviour
             return;
         }
 
-        // ── NEW: initialise smoke charges for the local owner ─────────────────
         _smokeCharges = smokeMaxCharges;
-        // ─────────────────────────────────────────────────────────────────────
 
         EquipWeapon(0);
         HUDManager.Instance?.SetInventoryVisible(false);
@@ -164,15 +149,21 @@ public class ShooterController : NetworkBehaviour
     private void Update()
     {
         if (!IsOwner || _stats.IsDead()) return;
+
+        // ── FIX: block all input while the pause overlay is open ──────────────
+        // PauseMenuUI runs at [DefaultExecutionOrder(-100)] so IsPaused is
+        // already set before this script's default-order Update() reads it.
+        if (PauseMenuUI.IsPaused) return;
+
         HandleFire();
         HandleScope();
         HandleReload();
         HandleInventory();
-        HandleSmokeGrenade();   // ← NEW
-        TickSmokeCooldown();    // ← NEW
+        HandleSmokeGrenade();
+        TickSmokeCooldown();
     }
 
-    // ── NEW: Smoke grenade input & throw ──────────────────────────────────────
+    // ── Smoke grenade input & throw ───────────────────────────────────────────
 
     private void HandleSmokeGrenade()
     {
@@ -187,33 +178,26 @@ public class ShooterController : NetworkBehaviour
             return;
         }
 
-        // Flatten forward for spawn position so looking up/down doesn't pull
-        // the spawn point into the CharacterController capsule.
         Vector3 flatForward = playerCamera.transform.forward;
         flatForward.y = 0f;
         if (flatForward.sqrMagnitude < 0.001f) flatForward = transform.forward;
         flatForward.Normalize();
 
-        // Spawn at shoulder height, 1 m in front — always outside the capsule.
         Vector3 spawnPos = transform.position
                          + Vector3.up  * 1.5f
                          + flatForward * 1.0f;
 
-        // Throw direction follows actual camera aim (pitch included).
         Vector3 velocity = playerCamera.transform.forward * smokeThrowForce
                          + Vector3.up                     * smokeThrowArc;
 
         ThrowSmokeGrenadeServerRpc(spawnPos, velocity);
 
-        // ── Local owner feedback ──────────────────────────────────────────────
         _smokeCharges--;
         onSmokeGrenadeFired?.Invoke();
         onSmokeChargesChanged?.Invoke(_smokeCharges);
 
-        // Increment NV so ShooterAnimator fires the 3P throw trigger everywhere.
         if (_stats != null) _stats.smokeThrowSequence.Value++;
 
-        // Cooldown starts only once ALL charges are spent.
         if (_smokeCharges <= 0)
             _smokeTimer = smokeGrenadeCooldown;
     }
@@ -253,7 +237,6 @@ public class ShooterController : NetworkBehaviour
 
         if (_smokeTimer <= 0f)
         {
-            // Cooldown finished — fire transition events immediately
             _smokeTimer   = 0f;
             _smokeCharges = smokeMaxCharges;
             onSmokeGrenadeCooldown?.Invoke(0f);
@@ -262,7 +245,6 @@ public class ShooterController : NetworkBehaviour
             return;
         }
 
-        // FIX: throttle HUD push to 20 Hz — was firing every frame (~60/s)
         _smokeHudTick -= Time.deltaTime;
         if (_smokeHudTick <= 0f)
         {
@@ -320,17 +302,10 @@ public class ShooterController : NetworkBehaviour
             onScopeChanged?.Invoke(_isScoped);
             _prevScoped = _isScoped;
             if (_stats != null) _stats.isScopedNV.Value = _isScoped;
-
-            // FIX: hide the FP arms so the weapon mesh doesn't show over the scope overlay.
-            // Only Renderers are toggled — scripts on fpShooterArmsRoot keep running normally.
             SetFPArmsVisible(!_isScoped);
         }
     }
 
-    /// <summary>
-    /// Toggles all Renderers under fpShooterArmsRoot without deactivating the
-    /// GameObject, so weapon scripts (firing, reloading, etc.) keep running.
-    /// </summary>
     private void SetFPArmsVisible(bool visible)
     {
         if (fpShooterArmsRoot == null) return;

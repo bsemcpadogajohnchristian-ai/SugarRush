@@ -1,23 +1,42 @@
-// LobbyManager.cs — Sugar Rush  (MODIFIED for Start Menu + Lobby Room)
+// LobbyManager.cs — Sugar Rush
 //
-// ── CHANGES FROM ORIGINAL ────────────────────────────────────────────────────
-//   1. Auto-start removed from OnClientConnected.
-//      Game now starts only when TryStartGame() is called (by LobbyNetworkBridge
-//      when the host clicks the Start Game button in LobbyRoomUI).
-//   2. Three new public accessor methods added so LobbyNetworkBridge can read
-//      the connected client list and slot assignments:
-//        • GetConnectedClients()        → List<ulong>
-//        • GetClientSlot(ulong)         → int
-//        • GetConnectedClientCount()    → int
-//   3. TryStartGame() public method — loads GameScene for everyone.
-//   4. OnClientConnected now also calls LobbyNetworkBridge.BroadcastLobbyState()
-//      so the lobby room UI refreshes as players join.
-//   5. OnClientDisconnected calls BroadcastLobbyState() for the same reason.
-//   6. RefreshLobbyUIRpc now also calls LobbyRoomUI for backward compatibility.
-//   7. PLAYERS_NEEDED constant removed (game is now host-controlled).
+// ── STALE SINGLETON FIX (game won't start on second session) ─────────────────
 //
-// ── EVERYTHING ELSE IS UNCHANGED ─────────────────────────────────────────────
-//   SpawnAllPlayers, PrepareRematch, GetSpawnPosition, OnSceneLoaded — untouched.
+//   ROOT CAUSE:
+//     DontDestroyOnLoad(gameObject) is called in OnNetworkSpawn(), so the
+//     LobbyManager survives across scene loads throughout a session. When the
+//     host quits to the main menu (PauseMenuUI shuts NGO down), NGO calls
+//     OnNetworkDespawn() but does NOT destroy the GameObject — it remains in
+//     the DontDestroyOnLoad scene as a "stale" un-spawned object with
+//     Instance still pointing to it.
+//
+//     When the player hosts a new session and LobbyScene loads again, a fresh
+//     LobbyManager exists in the scene. Its Awake() previously ran:
+//
+//       if (Instance != null && Instance != this) { Destroy(gameObject); return; }
+//
+//     Because Instance != null (the stale object), the NEW object destroyed
+//     ITSELF. NGO found no LobbyManager to spawn, so Instance remained the
+//     stale un-spawned object. Every IsServer check on it returned false →
+//     TryStartGame(), OnClientConnected, and all server logic silently did
+//     nothing → game could never start.
+//
+//   FIX:
+//     Awake() now destroys the OLD stale instance instead of the new one.
+//     This is safe because:
+//       • Within a single session only one LobbyManager is ever active — it
+//         lives in LobbyScene and is kept alive by DontDestroyOnLoad.
+//         LobbyScene only loads once per session, so there is never a
+//         legitimate "second" LobbyManager while one is already spawned.
+//       • Between sessions (i.e., after NGO shutdown) the old Instance is
+//         un-spawned and can be cleanly replaced.
+//
+//   RESULT:
+//     On every new host session the fresh LobbyManager takes over as
+//     Instance, NGO spawns it via OnNetworkSpawn, and all server-side lobby
+//     and game-start logic works correctly.
+//
+// ── ALL OTHER CHANGES ARE UNCHANGED FROM PREVIOUS VERSION ────────────────────
 
 using System.Collections;
 using System.Collections.Generic;
@@ -50,18 +69,33 @@ public class LobbyManager : NetworkBehaviour
 
     private void Awake()
     {
-        if (Instance != null && Instance != this) { Destroy(gameObject); return; }
+        if (Instance != null && Instance != this)
+        {
+            // ── FIX: destroy the STALE old instance, not this new one ─────────
+            //
+            // The old Instance is a leftover from a previous NGO session that
+            // was DontDestroyOnLoad'd and never destroyed when NGO shut down.
+            // It is un-spawned and useless — replace it with the fresh object
+            // that NGO is about to spawn for the new session.
+            //
+            // Destroying Instance.gameObject also removes LobbyNetworkBridge
+            // (which lives on the same GameObject), so its singleton is reset
+            // to Unity's fake-null before the new LobbyNetworkBridge.Awake()
+            // runs — no stale pointer survives.
+            Destroy(Instance.gameObject);
+        }
+
         Instance = this;
-        // ── FIX: DontDestroyOnLoad removed from Awake. ────────────────────────
-        // Calling it here moves the GameObject OUT of the active scene before
-        // NGO scans for scene NetworkObjects (via GetActiveScene().GetRootGameObjects()).
-        // That caused IsSpawned to stay false forever → LobbyRoomUI 10 s timeout.
-        // It is now called in OnNetworkSpawn, after NGO has already spawned us.
+        // DontDestroyOnLoad is intentionally NOT called here.
+        // It is called in OnNetworkSpawn(), after NGO has already spawned this
+        // NetworkObject, so it is never moved out of the active scene before
+        // NGO's initial scan (which caused IsSpawned to stay false forever in
+        // the original code — see previous changelog entry).
     }
 
     public override void OnNetworkSpawn()
     {
-        // ── FIX: persist AFTER NGO has spawned this NetworkObject ─────────────
+        // Persist AFTER NGO has spawned this NetworkObject.
         DontDestroyOnLoad(gameObject);
 
         if (!IsServer) return;
@@ -106,9 +140,6 @@ public class LobbyManager : NetworkBehaviour
         AddClient(id);
         Debug.Log($"[Lobby] Connected: {id}   Players: {_clients.Count}");
         RefreshLobbyUIRpc(_clients.Count);
-
-        // ── CHANGED: notify LobbyNetworkBridge so lobby room UI updates ───────
-        // (Auto-start logic removed — host manually starts via TryStartGame())
         LobbyNetworkBridge.Instance?.BroadcastLobbyState();
     }
 
@@ -118,12 +149,10 @@ public class LobbyManager : NetworkBehaviour
         _clients.Remove(id);
         _clientSlot.Remove(id);
         RefreshLobbyUIRpc(_clients.Count);
-
-        // ── CHANGED: update lobby room UI when someone leaves ─────────────────
         LobbyNetworkBridge.Instance?.BroadcastLobbyState();
     }
 
-    // ── Scene loaded callback (fires when GameScene finishes loading) ─────────
+    // ── Scene loaded callback ─────────────────────────────────────────────────
 
     private void OnSceneLoaded(string scene, LoadSceneMode mode,
         List<ulong> done, List<ulong> timedOut)
@@ -146,7 +175,7 @@ public class LobbyManager : NetworkBehaviour
         Debug.Log("[Lobby] Match started.");
     }
 
-    // ── Manual game start (called by LobbyNetworkBridge.RequestStartGameServerRpc) ──
+    // ── Manual game start ─────────────────────────────────────────────────────
 
     /// <summary>
     /// Loads GameScene for all connected clients. Called by LobbyNetworkBridge
@@ -167,7 +196,7 @@ public class LobbyManager : NetworkBehaviour
         NetworkManager.Singleton.SceneManager.LoadScene(gameSceneName, LoadSceneMode.Single);
     }
 
-    // ── Rematch (unchanged from original) ────────────────────────────────────
+    // ── Rematch ───────────────────────────────────────────────────────────────
 
     /// <summary>
     /// Called by ResultScreenManager before reloading GameScene for a rematch.
@@ -186,7 +215,7 @@ public class LobbyManager : NetworkBehaviour
         Debug.Log("[Lobby] PrepareRematch — state reset, ready for OnSceneLoaded.");
     }
 
-    // ── Player spawning (unchanged from original) ─────────────────────────────
+    // ── Player spawning ───────────────────────────────────────────────────────
 
     private void SpawnAllPlayers()
     {
@@ -233,7 +262,6 @@ public class LobbyManager : NetworkBehaviour
                 ps.currentHP.Value = role == PlayerRole.Shooter
                     ? ps.shooterMaxHP : ps.collectorMaxHP;
 
-                // ── Set the registered display name from the lobby ────────────
                 string registeredName = LobbyNetworkBridge.Instance?.GetPlayerName(clientId) ?? "Player";
                 ps.playerName.Value = new Unity.Collections.FixedString64Bytes(registeredName);
             }
@@ -306,19 +334,16 @@ public class LobbyManager : NetworkBehaviour
         return (pos, rot);
     }
 
-    // ── RPC — refresh legacy LobbyUI AND new LobbyRoomUI ─────────────────────
+    // ── RPC — refresh LobbyUI and LobbyRoomUI ────────────────────────────────
 
     [Rpc(SendTo.ClientsAndHost)]
     private void RefreshLobbyUIRpc(int count)
     {
-        // Legacy support (LobbyUI.cs may still be in the scene)
         LobbyUI.Instance?.SetPlayerCount(count);
-
-        // New lobby room UI
         LobbyRoomUI.Instance?.SetPlayerCount(count);
     }
 
-    // ── NEW: Public accessors used by LobbyNetworkBridge ─────────────────────
+    // ── Public accessors used by LobbyNetworkBridge ───────────────────────────
 
     /// <summary>Returns a snapshot of all connected client IDs in join order.</summary>
     public List<ulong> GetConnectedClients() => new List<ulong>(_clients);

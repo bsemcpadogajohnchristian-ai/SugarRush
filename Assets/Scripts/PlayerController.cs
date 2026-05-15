@@ -283,11 +283,22 @@ public class PlayerController : NetworkBehaviour
 
         if (cameraHolder != null)
             _camDefaultLocalPos = cameraHolder.localPosition;
+
+        // ── Restore saved mouse sensitivity ──────────────────────────────────
+        // StartMenuManager and PauseMenuUI both write "SR_MouseSens" to PlayerPrefs.
+        // Read it here so the value survives scene loads without needing the
+        // menu to be open.
+        mouseSensitivity = PlayerPrefs.GetFloat("SR_MouseSens", mouseSensitivity);
     }
 
     private void Update()
     {
         if (!IsOwner || _stats.IsDead()) return;
+
+        // ── PAUSE MENU GUARD ──────────────────────────────────────────────────
+        // When PauseMenuUI is open, skip all input so the cursor is free to
+        // interact with the pause overlay buttons.
+        if (PauseMenuUI.IsPaused) return;
 
         Look();
         Move();
