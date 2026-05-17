@@ -1,5 +1,11 @@
 // FPArmsAnimator.cs — Sugar Rush
 //
+// ── PAUSE GUARD ADDED ────────────────────────────────────────────────────────
+//   BUG: FP arms Speed animation still ticked from live input while paused,
+//   causing the collector arms to appear to "move" while the pause menu
+//   was open. Fix: PauseMenuUI.IsPaused early-out in Update() zeroes Speed
+//   and returns before any Input.GetAxis reads.
+//
 // ── MAGNET ABILITY ADDED ──────────────────────────────────────────────────────
 //   • Added H_ActivateMagnet animator hash (trigger "ActivateMagnet").
 //   • Added H_IsMagnet animator hash (bool "IsMagnet") — stays true for the
@@ -106,6 +112,17 @@ public class FPArmsAnimator : MonoBehaviour
             Debug.LogWarning("[FPArmsAnimator] Missing reference — check Inspector or " +
                              "prefab hierarchy. Ensure fpArms starts INACTIVE in the prefab.", this);
             enabled = false;
+            return;
+        }
+
+        // ── PAUSE GUARD ───────────────────────────────────────────────────────
+        // Input.GetAxis is still readable while paused. Guard here so movement
+        // speed and pickup animations don't tick from stale input while the
+        // pause overlay is open.
+        if (PauseMenuUI.IsPaused)
+        {
+            _smoothedSpeed = 0f;
+            _anim.SetFloat(H_Speed, 0f);
             return;
         }
 

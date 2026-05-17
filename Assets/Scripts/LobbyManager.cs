@@ -1,40 +1,23 @@
 // LobbyManager.cs — Sugar Rush
 //
-// ── STALE SINGLETON FIX (game won't start on second session) ─────────────────
+// ── STALE SINGLETON FIX v2 (game won't start on second session — FINAL FIX) ──
 //
-//   ROOT CAUSE:
-//     DontDestroyOnLoad(gameObject) is called in OnNetworkSpawn(), so the
-//     LobbyManager survives across scene loads throughout a session. When the
-//     host quits to the main menu (PauseMenuUI shuts NGO down), NGO calls
-//     OnNetworkDespawn() but does NOT destroy the GameObject — it remains in
-//     the DontDestroyOnLoad scene as a "stale" un-spawned object with
-//     Instance still pointing to it.
+//   PREVIOUS FIX (v1): Awake() destroyed the OLD instance instead of `this`.
+//   That was the right direction, but used Destroy() — which is deferred to
+//   end-of-frame. LobbyNetworkBridge.Awake() runs on the SAME new GameObject
+//   in the SAME frame, immediately after LobbyManager.Awake(). At that point
+//   the old GameObject is NOT yet destroyed, so Unity's fake-null operator still
+//   returns true for (LobbyNetworkBridge.Instance != null). LobbyNetworkBridge
+//   then saw Instance != null && Instance != this → called Destroy(gameObject)
+//   on the NEW object → killed both new LobbyManager AND new LobbyNetworkBridge
+//   → NGO had nothing to spawn → game could never start on the second session.
 //
-//     When the player hosts a new session and LobbyScene loads again, a fresh
-//     LobbyManager exists in the scene. Its Awake() previously ran:
-//
-//       if (Instance != null && Instance != this) { Destroy(gameObject); return; }
-//
-//     Because Instance != null (the stale object), the NEW object destroyed
-//     ITSELF. NGO found no LobbyManager to spawn, so Instance remained the
-//     stale un-spawned object. Every IsServer check on it returned false →
-//     TryStartGame(), OnClientConnected, and all server logic silently did
-//     nothing → game could never start.
-//
-//   FIX:
-//     Awake() now destroys the OLD stale instance instead of the new one.
-//     This is safe because:
-//       • Within a single session only one LobbyManager is ever active — it
-//         lives in LobbyScene and is kept alive by DontDestroyOnLoad.
-//         LobbyScene only loads once per session, so there is never a
-//         legitimate "second" LobbyManager while one is already spawned.
-//       • Between sessions (i.e., after NGO shutdown) the old Instance is
-//         un-spawned and can be cleanly replaced.
-//
-//   RESULT:
-//     On every new host session the fresh LobbyManager takes over as
-//     Instance, NGO spawns it via OnNetworkSpawn, and all server-side lobby
-//     and game-start logic works correctly.
+//   FINAL FIX: Changed Destroy(Instance.gameObject) to DestroyImmediate().
+//   DestroyImmediate is synchronous — the old GameObject (and its
+//   LobbyNetworkBridge component) is fully torn down before the next line of
+//   code in Awake() executes, and certainly before LobbyNetworkBridge.Awake()
+//   on the new object runs. The fake-null operator then returns null for the
+//   stale reference, so LobbyNetworkBridge takes over cleanly.
 //
 // ── ALL OTHER CHANGES ARE UNCHANGED FROM PREVIOUS VERSION ────────────────────
 
@@ -71,18 +54,30 @@ public class LobbyManager : NetworkBehaviour
     {
         if (Instance != null && Instance != this)
         {
-            // ── FIX: destroy the STALE old instance, not this new one ─────────
+            // ── FIX: use DestroyImmediate, NOT Destroy ────────────────────────
             //
-            // The old Instance is a leftover from a previous NGO session that
-            // was DontDestroyOnLoad'd and never destroyed when NGO shut down.
-            // It is un-spawned and useless — replace it with the fresh object
-            // that NGO is about to spawn for the new session.
+            // The old Instance is a DontDestroyOnLoad leftover from the previous
+            // NGO session. We must replace it with this new object.
             //
-            // Destroying Instance.gameObject also removes LobbyNetworkBridge
-            // (which lives on the same GameObject), so its singleton is reset
-            // to Unity's fake-null before the new LobbyNetworkBridge.Awake()
-            // runs — no stale pointer survives.
-            Destroy(Instance.gameObject);
+            // PROBLEM with Destroy(): it is deferred to end-of-frame. Both
+            // LobbyManager and LobbyNetworkBridge live on the SAME new GameObject,
+            // so their Awake() calls run back-to-back in the same frame.
+            // When LobbyNetworkBridge.Awake() runs immediately after this, the
+            // old GameObject has NOT been destroyed yet — Unity's fake-null
+            // operator still returns true for (LobbyNetworkBridge.Instance != null).
+            // LobbyNetworkBridge then sees Instance != null && Instance != this
+            // → calls Destroy(gameObject) on the NEW object → kills our new
+            // LobbyManager too → NGO has nothing to spawn → game never starts.
+            //
+            // FIX: DestroyImmediate() tears down the old GameObject synchronously
+            // right now, before LobbyNetworkBridge.Awake() runs. Unity's
+            // fake-null operator then returns null for the old LobbyNetworkBridge
+            // reference, so the new LobbyNetworkBridge.Awake() takes over cleanly.
+            //
+            // DestroyImmediate is safe here because:
+            //   • We are in Awake() (not inside physics/rendering callbacks).
+            //   • The old object is un-spawned and carries no live NGO state.
+            DestroyImmediate(Instance.gameObject);
         }
 
         Instance = this;

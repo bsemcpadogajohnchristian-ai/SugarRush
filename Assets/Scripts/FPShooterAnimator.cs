@@ -1,6 +1,14 @@
 // FPShooterAnimator.cs
 // Sugar Rush — Unity 6.3 LTS + NGO v2.1+
 //
+// ── PAUSE GUARD ADDED ────────────────────────────────────────────────────────
+//   BUG: Clicking the mouse while the pause menu was open played the FP fire
+//   animation even though ShooterController correctly blocked the actual shot.
+//   ROOT CAUSE: UpdateAutoFire() reads Input.GetMouseButton(0) directly and
+//   was never guarded by PauseMenuUI.IsPaused.
+//   FIX: PauseMenuUI.IsPaused early-out in Update() forces IsFiring = false
+//   and Speed = 0 before any input read occurs.
+//
 // ── SMOKE GRENADE ADDED ───────────────────────────────────────────────────────
 //   • Added H_ThrowSmoke animator hash (trigger "ThrowSmoke").
 //   • OnEnable subscribes to ShooterController.onSmokeGrenadeFired.
@@ -137,6 +145,20 @@ public class FPShooterAnimator : MonoBehaviour
             _anim.SetBool(H_IsReloading, false);
             _anim.SetFloat(H_Speed,      0f);
             _smoothedSpeed = 0f;
+            return;
+        }
+
+        // ── PAUSE GUARD ───────────────────────────────────────────────────────
+        // ShooterController blocks actual firing while paused, but this animator
+        // still ran UpdateAutoFire() which reads Input.GetMouseButton(0) directly
+        // and set IsFiring = true — playing the fire animation on the FP arms
+        // even though no shot was fired.
+        // Fix: when paused, force IsFiring off and bail out before any input read.
+        if (PauseMenuUI.IsPaused)
+        {
+            _anim.SetBool(H_IsFiring, false);
+            _smoothedSpeed = 0f;
+            _anim.SetFloat(H_Speed, 0f);
             return;
         }
 
