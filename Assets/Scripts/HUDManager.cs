@@ -79,6 +79,9 @@ public class HUDManager : MonoBehaviour
     [Header("Ammo (Shooter)")]
     public GameObject      ammoPanel;
     public TextMeshProUGUI ammoText;
+    [Tooltip("TMP label that shows the reserve (total) ammo, e.g. \"90\". " +
+             "Place it next to ammoText in the AmmoPanel, separated by a '/' label.")]
+    public TextMeshProUGUI totalAmmoText;
     public TextMeshProUGUI reloadText;
 
     [Tooltip("Image that displays the current weapon's icon. " +
@@ -498,7 +501,8 @@ public class HUDManager : MonoBehaviour
 
     private void UpdateAmmo(int cur, int total)
     {
-        if (ammoText) ammoText.text = $"{cur}";
+        if (ammoText)      ammoText.text     = $"{cur}";
+        if (totalAmmoText) totalAmmoText.text = $"{total}";
     }
 
     private void UpdateCandyCount(int count)
@@ -712,6 +716,7 @@ public class HUDManager : MonoBehaviour
     {
         if (ammoText)   ammoText.gameObject.SetActive(false);
         if (reloadText) reloadText.gameObject.SetActive(true);
+        // totalAmmoText stays visible during reload so reserve count is always readable
     }
 
     private void HideReloadText()
