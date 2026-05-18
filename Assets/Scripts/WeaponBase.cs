@@ -1,21 +1,25 @@
 // WeaponBase.cs — Sugar Rush
 //
-// ── KILL FEED CHANGES ─────────────────────────────────────────────────────────
-//   ReportHit(ulong, Vector3, Vector3) and ReportHit(ulong, Vector3, Vector3, float)
-//   now pass weaponName to RegisterHitServerRpc so the server knows which weapon
-//   made the kill and can display it in the kill feed.
+// ── AMMO FIX ──────────────────────────────────────────────────────────────────
+//   BUG: Ammo was effectively infinite.
 //
-//   ReportWorldHit — unchanged (world hits don't kill players).
-//   All other logic is identical to the original.
+//   ROOT CAUSE 1 — ReloadRoutine():
+//     _currentAmmo was simply set to magazineSize without ever subtracting
+//     from _totalAmmo. You could reload indefinitely with no reserve cost.
+//   FIX: Reload now calculates how many rounds are needed, caps it against
+//     what's left in _totalAmmo, deducts from _totalAmmo, and adds to
+//     _currentAmmo. Partial reloads are supported (if reserves are low).
 //
-// ── AMMO SPAWNER CHANGES ──────────────────────────────────────────────────────
-//   RefillAmmo()    — now also fires onAmmoChanged so the HUD updates correctly
-//                     when ammo is restored externally (e.g. from a pickup).
-//                     Previously it only set _currentAmmo silently.
-//   RefillAllAmmo() — NEW method. Refills both magazine (_currentAmmo) and
-//                     reserve (_totalAmmo) to their maximums, then fires
-//                     onAmmoChanged. Called by ShooterController.RefillAllAmmo()
-//                     when an AmmoPickup is collected by the teammate Collector.
+//   ROOT CAUSE 2 — StartReload():
+//     No guard for _totalAmmo == 0. The player could trigger the reload
+//     animation and sound even when completely dry.
+//   FIX: Added `|| _totalAmmo <= 0` guard.
+//
+//   NOTE: ShotgunWeapon overrides ReloadRoutine() and is fixed separately.
+//   NOTE: EquipWeapon() in ShooterController called RefillAmmo() on weapon
+//         swap — that is fixed in ShooterController.cs.
+//
+// ── KILL FEED / AMMO SPAWNER (unchanged from previous version) ────────────────
 
 using System.Collections;
 using Unity.Netcode;
@@ -55,10 +59,10 @@ public abstract class WeaponBase : NetworkBehaviour
     public UnityEvent           onReloadStart = new();
     public UnityEvent           onReloadEnd   = new();
 
-    protected int      _currentAmmo;
-    protected int      _totalAmmo;
-    protected bool     _isReloading;
-    protected float    _nextFireTime;
+    protected int       _currentAmmo;
+    protected int       _totalAmmo;
+    protected bool      _isReloading;
+    protected float     _nextFireTime;
     protected Coroutine _reloadCoroutine;
     protected ShooterController _shooter;
 
@@ -98,7 +102,8 @@ public abstract class WeaponBase : NetworkBehaviour
 
     public virtual void StartReload()
     {
-        if (_isReloading || _currentAmmo == magazineSize) return;
+        // ── FIX: also block reload when reserve is empty ──────────────────────
+        if (_isReloading || _currentAmmo == magazineSize || _totalAmmo <= 0) return;
         _reloadCoroutine = StartCoroutine(ReloadRoutine());
     }
 
@@ -108,7 +113,16 @@ public abstract class WeaponBase : NetworkBehaviour
         onReloadStart?.Invoke();
         if (reloadSound != null) audioSource?.PlayOneShot(reloadSound);
         yield return new WaitForSeconds(reloadTime);
-        _currentAmmo     = magazineSize;
+
+        // ── FIX: deduct from reserve, not a free refill ───────────────────────
+        // How many rounds the magazine needs to be full.
+        int needed = magazineSize - _currentAmmo;
+        // Can't pull more than what's left in reserve.
+        int refill = Mathf.Min(needed, _totalAmmo);
+        _totalAmmo   -= refill;
+        _currentAmmo += refill;
+        // ─────────────────────────────────────────────────────────────────────
+
         _isReloading     = false;
         _reloadCoroutine = null;
         onReloadEnd?.Invoke();
@@ -126,8 +140,8 @@ public abstract class WeaponBase : NetworkBehaviour
     // ── Ammo refill helpers ───────────────────────────────────────────────────
 
     /// <summary>
-    /// Refills the current magazine only.
-    /// Now fires onAmmoChanged so the HUD updates.
+    /// Refills the current magazine only (used on weapon swap — no reserve cost).
+    /// Fires onAmmoChanged so the HUD updates.
     /// </summary>
     public void RefillAmmo()
     {
@@ -136,9 +150,9 @@ public abstract class WeaponBase : NetworkBehaviour
     }
 
     /// <summary>
-    /// NEW — Refills both the magazine AND the reserve to their maximums,
-    /// then fires onAmmoChanged. Called by ShooterController.RefillAllAmmo()
-    /// when the team's Collector picks up an AmmoPickup.
+    /// Refills both the magazine AND the reserve to their maximums.
+    /// Called by ShooterController.RefillAllAmmo() when the teammate Collector
+    /// picks up an AmmoPickup.
     /// </summary>
     public void RefillAllAmmo()
     {
@@ -177,7 +191,7 @@ public abstract class WeaponBase : NetworkBehaviour
         }
     }
 
-    // ── Hit reporting — now includes weaponName for kill feed attribution ─────
+    // ── Hit reporting ─────────────────────────────────────────────────────────
 
     /// <summary>Uses this weapon's default damage and weaponName.</summary>
     protected void ReportHit(ulong targetId, Vector3 point, Vector3 normal)
@@ -187,7 +201,6 @@ public abstract class WeaponBase : NetworkBehaviour
     protected void ReportHit(ulong targetId, Vector3 point, Vector3 normal, float dmg)
     {
         SpawnImpactFX(point, normal);
-        // Pass weaponName so the server can log it in the kill feed.
         _shooter?.RegisterHitServerRpc(targetId, dmg, weaponName);
         _shooter?.BroadcastImpactRpc(_shooter.CurrentWeaponIndex, point, normal);
     }

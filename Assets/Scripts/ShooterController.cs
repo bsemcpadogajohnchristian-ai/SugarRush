@@ -1,21 +1,13 @@
 // ShooterController.cs — Sugar Rush
 //
-// ── PAUSE GUARD ADDED ─────────────────────────────────────────────────────────
-//   BUG: Mouse-button fire input was processed even while PauseMenuUI was open
-//   because ShooterController.Update() had no IsPaused check, unlike
-//   PlayerController which already guarded its Update() correctly.
+// ── AMMO FIX ──────────────────────────────────────────────────────────────────
+//   BUG: EquipWeapon() called _current?.RefillAmmo() on the weapon being
+//   swapped away. This silently reset the old weapon's magazine to full every
+//   time the player switched weapons, contributing to the infinite-ammo feel.
+//   FIX: That line has been removed. Weapons now retain their actual ammo count
+//   across swaps. Reserve ammo is only restored by an AmmoPickup.
 //
-//   FIX: Added `if (PauseMenuUI.IsPaused) return;` at the top of Update(),
-//   immediately after the existing IsOwner / IsDead guard.
-//   This blocks HandleFire(), HandleScope(), HandleReload(), HandleInventory(),
-//   HandleSmokeGrenade(), and TickSmokeCooldown() — all input-driven paths —
-//   while the pause overlay is visible. No gameplay logic is changed.
-//
-//   PauseMenuUI runs at [DefaultExecutionOrder(-100)], ShooterController at the
-//   default (0), so IsPaused is already set before this script's Update() reads
-//   it — no single-frame race condition.
-//
-// ── SMOKE GRENADE (unchanged from previous version) ───────────────────────────
+// ── PAUSE GUARD / SMOKE GRENADE (unchanged from previous version) ─────────────
 
 using System.Collections;
 using System.Collections.Generic;
@@ -150,9 +142,7 @@ public class ShooterController : NetworkBehaviour
     {
         if (!IsOwner || _stats.IsDead()) return;
 
-        // ── FIX: block all input while the pause overlay is open ──────────────
-        // PauseMenuUI runs at [DefaultExecutionOrder(-100)] so IsPaused is
-        // already set before this script's default-order Update() reads it.
+        // ── Block all input while the pause overlay is open ───────────────────
         if (PauseMenuUI.IsPaused) return;
 
         HandleFire();
@@ -163,7 +153,7 @@ public class ShooterController : NetworkBehaviour
         TickSmokeCooldown();
     }
 
-    // ── Smoke grenade input & throw ───────────────────────────────────────────
+    // ── Smoke grenade ─────────────────────────────────────────────────────────
 
     private void HandleSmokeGrenade()
     {
@@ -362,7 +352,10 @@ public class ShooterController : NetworkBehaviour
         }
 
         _current?.CancelReload();
-        _current?.RefillAmmo();
+        // ── FIX: removed _current?.RefillAmmo() here.
+        // The old code reset the magazine to full on every weapon swap,
+        // making ammo effectively infinite across swaps. Weapons now
+        // retain their actual ammo state when you switch away from them.
 
         _currentIndex = index;
         _current      = availableWeapons[index];
@@ -516,7 +509,7 @@ public class ShooterController : NetworkBehaviour
     private void RefillAllAmmoRpc(RpcParams rpcParams = default)
     {
         // Runs only on the Shooter's own client.
-        // Each weapon fires onAmmoChanged, which the HUD already listens to.
+        // Each weapon fires onAmmoChanged so the HUD updates immediately.
         foreach (WeaponBase weapon in availableWeapons)
             weapon?.RefillAllAmmo();
 

@@ -1,9 +1,13 @@
 // ShotgunWeapon.cs — Sugar Rush
 //
-// ── KILL FEED CHANGE ─────────────────────────────────────────────────────────
-//   RegisterShotgunHitsServerRpc now receives weaponName as well.
-//   Pass it through from the Fire() call below.
-//   All other logic is identical to the original.
+// ── AMMO FIX ──────────────────────────────────────────────────────────────────
+//   BUG: Shotgun reload was infinite — each shell loaded added to _currentAmmo
+//   but never deducted from _totalAmmo.
+//   FIX: The while loop now also checks `_totalAmmo > 0`, decrements
+//   _totalAmmo for each shell loaded, and breaks early if reserves run out.
+//   StartReload() inherits the `_totalAmmo <= 0` guard from WeaponBase.
+//
+// ── KILL FEED CHANGE (unchanged from previous version) ───────────────────────
 
 using System.Collections;
 using System.Collections.Generic;
@@ -80,7 +84,6 @@ public class ShotgunWeapon : WeaponBase
             }
         }
 
-        // ── KILL FEED CHANGE: pass weaponName so server can attribute the kill ──
         if (_hitIds.Count > 0)
             _shooter?.RegisterShotgunHitsServerRpc(_hitIds.ToArray(), _hitDamages.ToArray(), weaponName);
 
@@ -95,13 +98,16 @@ public class ShotgunWeapon : WeaponBase
         _cancelReload = false;
         onReloadStart?.Invoke();
 
-        while (_currentAmmo < magazineSize)
+        // ── FIX: load one shell at a time, deducting from _totalAmmo each time.
+        // Stop early if reserves run dry or a shot cancels the reload.
+        while (_currentAmmo < magazineSize && _totalAmmo > 0)
         {
             if (_cancelReload) break;
             if (reloadSound != null) audioSource?.PlayOneShot(reloadSound);
             yield return new WaitForSeconds(reloadTime);
             if (_cancelReload) break;
 
+            _totalAmmo--;       // ← FIX: consume one shell from reserves
             _currentAmmo++;
             onAmmoChanged?.Invoke(_currentAmmo, _totalAmmo);
         }
