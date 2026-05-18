@@ -7,6 +7,15 @@
 //
 //   ReportWorldHit — unchanged (world hits don't kill players).
 //   All other logic is identical to the original.
+//
+// ── AMMO SPAWNER CHANGES ──────────────────────────────────────────────────────
+//   RefillAmmo()    — now also fires onAmmoChanged so the HUD updates correctly
+//                     when ammo is restored externally (e.g. from a pickup).
+//                     Previously it only set _currentAmmo silently.
+//   RefillAllAmmo() — NEW method. Refills both magazine (_currentAmmo) and
+//                     reserve (_totalAmmo) to their maximums, then fires
+//                     onAmmoChanged. Called by ShooterController.RefillAllAmmo()
+//                     when an AmmoPickup is collected by the teammate Collector.
 
 using System.Collections;
 using Unity.Netcode;
@@ -114,7 +123,31 @@ public abstract class WeaponBase : NetworkBehaviour
         onReloadEnd?.Invoke();
     }
 
-    public void RefillAmmo() => _currentAmmo = magazineSize;
+    // ── Ammo refill helpers ───────────────────────────────────────────────────
+
+    /// <summary>
+    /// Refills the current magazine only.
+    /// Now fires onAmmoChanged so the HUD updates.
+    /// </summary>
+    public void RefillAmmo()
+    {
+        _currentAmmo = magazineSize;
+        onAmmoChanged?.Invoke(_currentAmmo, _totalAmmo);
+    }
+
+    /// <summary>
+    /// NEW — Refills both the magazine AND the reserve to their maximums,
+    /// then fires onAmmoChanged. Called by ShooterController.RefillAllAmmo()
+    /// when the team's Collector picks up an AmmoPickup.
+    /// </summary>
+    public void RefillAllAmmo()
+    {
+        _currentAmmo = magazineSize;
+        _totalAmmo   = maxAmmo;
+        onAmmoChanged?.Invoke(_currentAmmo, _totalAmmo);
+    }
+
+    // ── Muzzle flash / impact FX ──────────────────────────────────────────────
 
     public void PlayMuzzleFlashLocal()
     {

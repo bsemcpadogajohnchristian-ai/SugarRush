@@ -27,6 +27,8 @@ public class CollectorController : NetworkBehaviour
     [Header("Pickup")]
     public float     pickupRadius         = 1.5f;
     public LayerMask candyLayer;
+    [Tooltip("Set to the layer your AmmoPickup GameObjects are on.")]
+    public LayerMask ammoLayer;
     public float     speedPenaltyPerCandy = 0.05f;
     public int       maxCarryCapacity     = 10;
 
@@ -154,6 +156,7 @@ public class CollectorController : NetworkBehaviour
         if (_stats.role.Value != PlayerRole.Collector) return;
         if (!Input.GetMouseButtonDown(0)) return;
 
+        // ── Candy ─────────────────────────────────────────────────────────────
         Collider[] hits = Physics.OverlapSphere(transform.position, pickupRadius, candyLayer);
         foreach (Collider hit in hits)
         {
@@ -162,7 +165,20 @@ public class CollectorController : NetworkBehaviour
             if (candy != null && candy.IsOnGround() && no != null)
             {
                 PickupCandyRpc(no.NetworkObjectId);
-                break;
+                return; // one pickup per click
+            }
+        }
+
+        // ── Ammo ──────────────────────────────────────────────────────────────
+        Collider[] ammoHits = Physics.OverlapSphere(transform.position, pickupRadius, ammoLayer);
+        foreach (Collider hit in ammoHits)
+        {
+            AmmoPickup ammo = hit.GetComponent<AmmoPickup>();
+            NetworkObject no  = hit.GetComponent<NetworkObject>();
+            if (ammo != null && no != null)
+            {
+                PickupAmmoRpc(no.NetworkObjectId);
+                return; // one pickup per click
             }
         }
     }
@@ -181,6 +197,18 @@ public class CollectorController : NetworkBehaviour
         _carriedCandies.Add(candy);
         carriedCount.Value++;
         CandySpawner.Instance?.NotifyCandyPickedUp(candy);
+    }
+
+    [Rpc(SendTo.Server)]
+    private void PickupAmmoRpc(ulong ammoId)
+    {
+        if (_stats.role.Value != PlayerRole.Collector) return;
+        if (!NetworkManager.SpawnManager.SpawnedObjects.TryGetValue(ammoId, out var obj)) return;
+
+        AmmoPickup ammo = obj.GetComponent<AmmoPickup>();
+        if (ammo == null) return;
+
+        ammo.PickupServer(_stats);
     }
 
     // ── Drop / Deliver ────────────────────────────────────────────────────────

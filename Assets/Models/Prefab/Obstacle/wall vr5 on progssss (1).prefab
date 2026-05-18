@@ -1,6 +1,6 @@
 %YAML 1.1
 %TAG !u! tag:unity3d.com,2011:
---- !u!1001 &8038680199399516627
+--- !u!1001 &7237935905757990623
 PrefabInstance:
   m_ObjectHideFlags: 0
   serializedVersion: 2
@@ -10,18 +10,23 @@ PrefabInstance:
     m_Modifications:
     - target: {fileID: -8679921383154817045, guid: 550763dbbb199914a94bcac7426fdb61,
         type: 3}
+      propertyPath: m_LocalScale.z
+      value: 0.66043
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: 550763dbbb199914a94bcac7426fdb61,
+        type: 3}
       propertyPath: m_LocalPosition.x
-      value: 6.506386
+      value: -11.2
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 550763dbbb199914a94bcac7426fdb61,
         type: 3}
       propertyPath: m_LocalPosition.y
-      value: 8.928116
+      value: 5.99
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 550763dbbb199914a94bcac7426fdb61,
         type: 3}
       propertyPath: m_LocalPosition.z
-      value: -21.448914
+      value: -22.35
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 550763dbbb199914a94bcac7426fdb61,
         type: 3}
@@ -61,7 +66,7 @@ PrefabInstance:
     - target: {fileID: 919132149155446097, guid: 550763dbbb199914a94bcac7426fdb61,
         type: 3}
       propertyPath: m_Name
-      value: wall vr5 on progssss
+      value: wall vr5 on progssss (1)
       objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
@@ -70,21 +75,47 @@ PrefabInstance:
     - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 550763dbbb199914a94bcac7426fdb61,
         type: 3}
       insertIndex: -1
-      addedObject: {fileID: 3524993671585464277}
+      addedObject: {fileID: 8390189628112901415}
+    - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 550763dbbb199914a94bcac7426fdb61,
+        type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 7285394790892327746}
   m_SourcePrefab: {fileID: 100100000, guid: 550763dbbb199914a94bcac7426fdb61, type: 3}
---- !u!1 &7155736972233905282 stripped
+--- !u!1 &7544437066949276558 stripped
 GameObject:
   m_CorrespondingSourceObject: {fileID: 919132149155446097, guid: 550763dbbb199914a94bcac7426fdb61,
     type: 3}
-  m_PrefabInstance: {fileID: 8038680199399516627}
+  m_PrefabInstance: {fileID: 7237935905757990623}
   m_PrefabAsset: {fileID: 0}
---- !u!64 &3524993671585464277
+--- !u!64 &8390189628112901415
 MeshCollider:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 7155736972233905282}
+  m_GameObject: {fileID: 7544437066949276558}
+  m_Material: {fileID: 0}
+  m_IncludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_ExcludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_LayerOverridePriority: 0
+  m_IsTrigger: 0
+  m_ProvidesContacts: 0
+  m_Enabled: 1
+  serializedVersion: 5
+  m_Convex: 0
+  m_CookingOptions: 30
+  m_Mesh: {fileID: 4493585093827132993, guid: 550763dbbb199914a94bcac7426fdb61, type: 3}
+--- !u!64 &7285394790892327746
+MeshCollider:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7544437066949276558}
   m_Material: {fileID: 0}
   m_IncludeLayers:
     serializedVersion: 2

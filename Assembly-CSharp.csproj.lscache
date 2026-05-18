@@ -52,6 +52,8 @@ TemporaryDependencyNodeTargetIdentifier=netstandard2.1
 [sourceFiles]
 Assets/Scripts/
  AllyIndicator.cs
+ AmmoPickup.cs
+ AmmoSpawner.cs
  BazookaWeapon.cs
  Candy.cs
  CandySpawner.cs

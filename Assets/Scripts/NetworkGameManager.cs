@@ -96,6 +96,7 @@ public class NetworkGameManager : NetworkBehaviour
         _timerSyncAccum     = 0f;
         matchState.Value    = MatchState.InProgress;
         CandySpawner.Instance?.StartSpawning();
+        AmmoSpawner.Instance?.StartSpawning();
         Debug.Log("[NGM] Match started.");
     }
 
@@ -116,6 +117,7 @@ public class NetworkGameManager : NetworkBehaviour
     {
         matchState.Value = MatchState.GameOver;
         CandySpawner.Instance?.StopSpawning();
+        AmmoSpawner.Instance?.StopSpawning();
         if      (scoreTeamA.Value > scoreTeamB.Value) EndGame(TeamID.TeamA);
         else if (scoreTeamB.Value > scoreTeamA.Value) EndGame(TeamID.TeamB);
         else                                           StartCoroutine(DrawRoutine());

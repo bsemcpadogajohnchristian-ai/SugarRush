@@ -499,4 +499,27 @@ public class ShooterController : NetworkBehaviour
 
     public WeaponBase GetCurrentWeapon() => _current;
     public bool IsScoped() => _isScoped;
+
+    // ── Ammo pickup (called by AmmoPickup on the server) ──────────────────────
+
+    /// <summary>
+    /// Called server-side by AmmoPickup when the teammate Collector grabs a pack.
+    /// Sends an RPC to this Shooter's owner so they refill all weapons locally.
+    /// </summary>
+    public void RefillAllAmmo()
+    {
+        if (!IsServer) return;
+        RefillAllAmmoRpc(RpcTarget.Single(OwnerClientId, RpcTargetUse.Temp));
+    }
+
+    [Rpc(SendTo.SpecifiedInParams)]
+    private void RefillAllAmmoRpc(RpcParams rpcParams = default)
+    {
+        // Runs only on the Shooter's own client.
+        // Each weapon fires onAmmoChanged, which the HUD already listens to.
+        foreach (WeaponBase weapon in availableWeapons)
+            weapon?.RefillAllAmmo();
+
+        Debug.Log("[ShooterController] All weapons refilled by teammate Collector!");
+    }
 }
